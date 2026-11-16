@@ -156,6 +156,9 @@ private fun GolderApp(initialTask: String = "") {
     var androidUseEndpointReady by remember { mutableStateOf(false) }
     var androidUseAllowedPackages by remember { mutableStateOf("") }
     var androidUseAdvancedEnabled by remember { mutableStateOf(false) }
+    var androidUseMaster by remember { mutableStateOf(false) }
+    var androidUsePaired by remember { mutableStateOf(false) }
+    var androidUseConnected by remember { mutableStateOf(false) }
     var androidUseBackgroundStatus by remember { mutableStateOf("") }
     val backgroundPreview by BackgroundPreview.state.collectAsState()
     val takeover by ManualTakeover.state.collectAsState()
@@ -200,12 +203,16 @@ private fun GolderApp(initialTask: String = "") {
     }
 
     fun refreshAndroidUseState() {
+        AndroidUseBridge.resetMasterOnUpdate(context)
         androidUseEnabled = AndroidUseBridge.isEnabled(context)
         androidUseControlAllowed = AndroidUseBridge.controlAllowed(context)
         androidUseAudit = AndroidUseBridge.recentAudit(context)
         androidUseEndpointReady = AndroidUseBridge.endpointReady(context)
         androidUseAllowedPackages = AndroidUseBridge.allowedPackages(context).joinToString(",")
         androidUseAdvancedEnabled = AndroidUseBridge.advancedEnabled(context)
+        androidUseMaster = AndroidUseBridge.masterEnabled(context)
+        androidUsePaired = Phase2Controller.isPaired(context)
+        androidUseConnected = Phase2Controller.shell() != null
     }
 
     fun backgroundStatusText(): String = when {
@@ -774,6 +781,9 @@ private fun GolderApp(initialTask: String = "") {
                 oauthError = oauthError,
                 androidUseEnabled = androidUseEnabled,
                 androidUseControlAllowed = androidUseControlAllowed,
+                androidUseMaster = androidUseMaster,
+                androidUsePaired = androidUsePaired,
+                androidUseConnected = androidUseConnected,
                 androidUseAudit = androidUseAudit,
                 androidUseEndpointReady = androidUseEndpointReady,
                 androidUseAllowedPackages = androidUseAllowedPackages,
@@ -867,14 +877,16 @@ private fun GolderApp(initialTask: String = "") {
                 onAndroidUseRefresh = {
                     refreshAndroidUseState()
                 },
-                onAndroidUseControl = { allowed ->
-                    AndroidUseBridge.setControlAllowed(context, allowed)
-                    refreshAndroidUseState()
-                },
-                onAndroidUseAdvanced = { enabled ->
-                    AndroidUseBridge.setAdvancedEnabled(context, enabled)
+                onAndroidUseMaster = { enabled ->
+                    AndroidUseBridge.setMaster(context, enabled)
                     if (!enabled) Phase2Controller.stop(context)
                     refreshAndroidUseState()
+                    androidUseBackgroundStatus = backgroundStatusText()
+                    // The catalog is attached when a project session opens, so an
+                    // already-open session has to be rebuilt to gain android_use.
+                    if (enabled && !running) {
+                        scope.launch { activeProject?.let { openWorkspace(it) } }
+                    }
                 },
                 onAndroidUseAllowedPackages = { value ->
                     AndroidUseBridge.setAllowedPackages(context, value)
@@ -1686,6 +1698,9 @@ private fun SettingsScreen(
     oauthError: String,
     androidUseEnabled: Boolean,
     androidUseControlAllowed: Boolean,
+    androidUseMaster: Boolean,
+    androidUsePaired: Boolean,
+    androidUseConnected: Boolean,
     androidUseAudit: String,
     androidUseEndpointReady: Boolean,
     androidUseAllowedPackages: String,
@@ -1706,8 +1721,7 @@ private fun SettingsScreen(
     onGitHubRevoke: () -> Unit,
     onAndroidUseSettings: () -> Unit,
     onAndroidUseRefresh: () -> Unit,
-    onAndroidUseControl: (Boolean) -> Unit,
-    onAndroidUseAdvanced: (Boolean) -> Unit,
+    onAndroidUseMaster: (Boolean) -> Unit,
     onAndroidUseAllowedPackages: (String) -> Unit,
     onForgetToken: () -> Unit,
     onClose: () -> Unit,
@@ -1783,24 +1797,28 @@ private fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    s.androidUseControl,
+                    if (language == "zh") "启用 AndroidUse" else "Enable AndroidUse",
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Switch(
-                    checked = androidUseControlAllowed,
-                    onCheckedChange = onAndroidUseControl,
+                    checked = androidUseMaster,
+                    onCheckedChange = { checked ->
+                        if (checked && !androidUseAdvancedEnabled) showAdvancedRisk = true
+                        else onAndroidUseMaster(checked)
+                    },
                 )
             }
-            TextButton(onClick = { androidUseDetailsExpanded = !androidUseDetailsExpanded }) {
-                Text(if (language == "zh") {
-                    if (androidUseDetailsExpanded) "收起更多选项" else "更多选项"
-                } else {
-                    if (androidUseDetailsExpanded) "Hide additional options" else "Additional options"
-                })
-            }
+            Text(
+                s.androidUseHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (androidUseMaster) {
             Text(s.androidUseStepAccessibility, style = MaterialTheme.typography.titleSmall)
             val live = androidUseLive
+            val stepOne = !androidUseEnabled || live != true
+            val stepTwo = !stepOne && (!androidUsePaired || !androidUseConnected)
             val needRepair = androidUseEnabled && live == false
             Text(
                 when {
@@ -1848,50 +1866,12 @@ private fun SettingsScreen(
             Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
                 Text(if (androidUseEnabled) s.androidUseRepair else s.androidUseOpenSettings)
             }
-            if (androidUseDetailsExpanded) {
-            OutlinedTextField(
-                value = androidUseAllowedPackages,
-                onValueChange = onAndroidUseAllowedPackages,
-                label = { Text(s.androidUseAllowedPackages) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                s.androidUseAllowedHint,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            }
-            Text(
-                s.androidUseHint,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (androidUseDetailsExpanded && androidUseAudit.isNotBlank()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        s.androidUseAudit,
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    TextButton(onClick = { auditExpanded = !auditExpanded }) {
-                        Text(
-                            if (auditExpanded) s.androidUseAuditHide else s.androidUseAuditShow,
-                        )
-                    }
-                }
-                if (auditExpanded) {
-                    Text(
-                        androidUseAudit,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+            if (stepOne) {
+                Text(
+                    if (language == "zh") "👉 下一步：完成这一步" else "👉 Next: finish this step",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
             Text(s.androidUseStepBackground, style = MaterialTheme.typography.titleSmall)
             Text(
@@ -1905,40 +1885,88 @@ private fun SettingsScreen(
             )
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    if (language == "zh") "允许后台控制" else "Allow background control",
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyMedium,
+                OutlinedButton(onClick = onAndroidUsePair, modifier = Modifier.weight(1f)) {
+                    Text(if (language == "zh") "① 配对" else "① Pair")
+                }
+                Button(onClick = onAndroidUseConnect, modifier = Modifier.weight(1f)) {
+                    Text(if (language == "zh") "② 连接" else "② Connect")
+                }
+            }
+            TextButton(onClick = onAndroidUseStop) {
+                Text(if (language == "zh") "停止后台控制" else "Stop background control")
+            }
+            Text(
+                androidUseBackgroundStatus,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            when {
+                stepTwo -> Text(
+                    if (androidUsePaired) {
+                        if (language == "zh") "👉 下一步：点“连接”" else "👉 Next: tap Connect"
+                    } else {
+                        if (language == "zh") "👉 下一步：先配对" else "👉 Next: pair first"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
                 )
-                Switch(
-                    checked = androidUseAdvancedEnabled,
-                    onCheckedChange = { checked ->
-                        if (checked) showAdvancedRisk = true else onAndroidUseAdvanced(false)
+                !stepOne -> Text(
+                    if (language == "zh") "✅ 已就绪，可以让 Agent 操作 App" else "✅ Ready: the agent can operate apps",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            TextButton(onClick = { androidUseDetailsExpanded = !androidUseDetailsExpanded }) {
+                Text(
+                    if (language == "zh") {
+                        if (androidUseDetailsExpanded) "收起更多选项" else "更多选项"
+                    } else {
+                        if (androidUseDetailsExpanded) "Hide additional options" else "Additional options"
                     },
                 )
             }
-            if (androidUseAdvancedEnabled) {
-                Row(
+            if (androidUseDetailsExpanded) {
+                OutlinedTextField(
+                    value = androidUseAllowedPackages,
+                    onValueChange = onAndroidUseAllowedPackages,
+                    label = { Text(s.androidUseAllowedPackages) },
+                    singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(onClick = onAndroidUsePair, modifier = Modifier.weight(1f)) {
-                        Text(if (language == "zh") "① 配对" else "① Pair")
-                    }
-                    Button(onClick = onAndroidUseConnect, modifier = Modifier.weight(1f)) {
-                        Text(if (language == "zh") "② 连接" else "② Connect")
-                    }
-                }
-                TextButton(onClick = onAndroidUseStop) {
-                    Text(if (language == "zh") "停止后台控制" else "Stop background control")
-                }
+                )
                 Text(
-                    androidUseBackgroundStatus,
+                    s.androidUseAllowedHint,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (androidUseAudit.isNotBlank()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            s.androidUseAudit,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(onClick = { auditExpanded = !auditExpanded }) {
+                            Text(
+                                if (auditExpanded) s.androidUseAuditHide else s.androidUseAuditShow,
+                            )
+                        }
+                    }
+                    if (auditExpanded) {
+                        Text(
+                            androidUseAudit,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
             }
             if (showAdvancedRisk) {
                 AlertDialog(
@@ -1949,7 +1977,7 @@ private fun SettingsScreen(
                         TextButton(
                             onClick = {
                                 showAdvancedRisk = false
-                                onAndroidUseAdvanced(true)
+                                onAndroidUseMaster(true)
                             },
                         ) { Text(s.androidUseAdvancedEnable) }
                     },

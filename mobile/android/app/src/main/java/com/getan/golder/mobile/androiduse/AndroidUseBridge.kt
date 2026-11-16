@@ -15,6 +15,7 @@ object AndroidUseBridge {
     private const val PAUSED_KEY = "paused"
     private const val ALLOWED_PACKAGES_KEY = "allowed-packages"
     private const val ADVANCED_KEY = "advanced-enabled"
+    private const val ENABLED_UPDATE_KEY = "enabled-update-time"
     const val PREFS_NAME = "android-use"
 
     fun endpointPath(context: Context): String =
@@ -104,6 +105,33 @@ object AndroidUseBridge {
         prefs(context).edit().putBoolean(ADVANCED_KEY, enabled).apply()
         if (!enabled) setPaused(context, true)
     }
+
+    /** One switch for the whole feature: visible-screen control plus background control. */
+    fun masterEnabled(context: Context): Boolean =
+        controlAllowed(context) && advancedEnabled(context)
+
+    @Synchronized
+    fun setMaster(context: Context, enabled: Boolean) {
+        setControlAllowed(context, enabled)
+        setAdvancedEnabled(context, enabled)
+        prefs(context).edit().putLong(ENABLED_UPDATE_KEY, lastUpdateTime(context)).apply()
+    }
+
+    /**
+     * An app update always unbinds accessibility here, so background control needs
+     * setup again. The master switch therefore starts off after every install.
+     */
+    @Synchronized
+    fun resetMasterOnUpdate(context: Context) {
+        val current = lastUpdateTime(context)
+        if (prefs(context).getLong(ENABLED_UPDATE_KEY, 0L) == current) return
+        if (masterEnabled(context)) setMaster(context, false)
+        prefs(context).edit().putLong(ENABLED_UPDATE_KEY, current).apply()
+    }
+
+    private fun lastUpdateTime(context: Context): Long = runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+    }.getOrDefault(0L)
 
     @Synchronized
     fun recordAudit(
