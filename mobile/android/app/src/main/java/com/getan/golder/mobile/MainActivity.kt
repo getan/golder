@@ -1891,7 +1891,7 @@ private fun SettingsScreen(
             }
             if (stepOne) {
                 Text(
-                    if (language == "zh") "👉 下一步：完成这一步" else "👉 Next: finish this step",
+                    if (language == "zh") "👉 下一步：开启无障碍服务" else "👉 Next: enable accessibility",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -1943,7 +1943,7 @@ private fun SettingsScreen(
                         if (androidUsePaired) {
                             if (language == "zh") "👉 下一步：点右侧“② 连接”" else "👉 Next: tap “② Connect” on the right"
                         } else {
-                            if (language == "zh") "👉 下一步：先配对" else "👉 Next: pair first"
+                            if (language == "zh") "👉 下一步：点“① 配对”" else "👉 Next: tap “① Pair”"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
