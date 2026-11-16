@@ -25,6 +25,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.systemGestureExclusion
@@ -1252,9 +1253,16 @@ private fun Conversation(
     val visible = entries.filterNot {
         it.kind == "tool" && isTodoTool(it.toolName) && it.id != latestTodoId
     }
+    // Compose keeps a text selection until another one replaces it. Bumping this
+    // key when the person taps anywhere else tears the SelectionContainer down,
+    // which is the only public way to clear it.
+    var selectionEpoch by remember { mutableStateOf(0) }
     LazyColumn(
         state = listState,
-        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp)
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = { selectionEpoch++ })
+            },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (visible.isEmpty()) {
@@ -1269,7 +1277,7 @@ private fun Conversation(
         if (running) {
             // Keep each command visible while the run is in progress.
             items(visible, key = { it.id }) { entry ->
-                ConversationEntry(entry)
+                ConversationEntry(entry, selectionEpoch)
             }
         } else {
             // Once the run is complete, merge consecutive completed commands.
@@ -1293,14 +1301,14 @@ private fun Conversation(
                     }
                     if (group.size > 1) {
                         item(key = "group-${group.first().id}-${group.last().id}") {
-                            ToolGroupCard(group)
+                            ToolGroupCard(group, selectionEpoch)
                         }
                         index = next
                         continue
                     }
                 }
                 item(key = "entry-${entry.id}") {
-                    ConversationEntry(entry)
+                    ConversationEntry(entry, selectionEpoch)
                 }
                 index++
             }
@@ -1318,12 +1326,12 @@ private fun Conversation(
 }
 
 @Composable
-private fun ConversationEntry(entry: Entry) {
+private fun ConversationEntry(entry: Entry, selectionEpoch: Int) {
     when {
-        entry.kind == "user" -> ChatBubble(entry.text, user = true)
-        entry.kind == "assistant" -> ChatBubble(entry.text, user = false)
+        entry.kind == "user" -> ChatBubble(entry.text, user = true, selectionEpoch)
+        entry.kind == "assistant" -> ChatBubble(entry.text, user = false, selectionEpoch)
         entry.kind == "tool" && isTodoTool(entry.toolName) -> TodoCard(entry)
-        entry.kind == "tool" -> ToolCard(entry)
+        entry.kind == "tool" -> ToolCard(entry, selectionEpoch)
         entry.kind == "thinking" -> Text(
             entry.text,
             style = MaterialTheme.typography.bodySmall,
@@ -1342,7 +1350,7 @@ private fun ConversationEntry(entry: Entry) {
 }
 
 @Composable
-private fun ChatBubble(text: String, user: Boolean) {
+private fun ChatBubble(text: String, user: Boolean, selectionEpoch: Int) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
@@ -1357,6 +1365,7 @@ private fun ChatBubble(text: String, user: Boolean) {
             modifier = Modifier.widthIn(max = 320.dp),
         ) {
             // Long-press selects, so replies can be copied like any other text.
+            key(selectionEpoch) {
             SelectionContainer {
                 Text(
                     text,
@@ -1369,12 +1378,13 @@ private fun ChatBubble(text: String, user: Boolean) {
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
                 )
             }
+            }
         }
     }
 }
 
 @Composable
-private fun ToolGroupCard(entries: List<Entry>) {
+private fun ToolGroupCard(entries: List<Entry>, selectionEpoch: Int) {
     var expanded by remember(entries.first().id, entries.last().id) {
         mutableStateOf(false)
     }
@@ -1424,7 +1434,7 @@ private fun ToolGroupCard(entries: List<Entry>) {
             if (expanded) {
                 Spacer(Modifier.height(6.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    entries.forEach { ToolCard(it) }
+                    entries.forEach { ToolCard(it, selectionEpoch) }
                 }
             }
         }
@@ -1432,7 +1442,7 @@ private fun ToolGroupCard(entries: List<Entry>) {
 }
 
 @Composable
-private fun ToolCard(entry: Entry) {
+private fun ToolCard(entry: Entry, selectionEpoch: Int) {
     val context = LocalContext.current
     var expanded by remember(entry.id) { mutableStateOf(false) }
     val apkPath = if (entry.toolDone && !entry.toolError) apkPathFrom(entry.toolOutput) else null
@@ -1493,6 +1503,7 @@ private fun ToolCard(entry: Entry) {
                 }
             }
             if (expanded) {
+                key(selectionEpoch) {
                 SelectionContainer {
                     Text(
                         entry.toolOutput.ifBlank {
@@ -1502,6 +1513,7 @@ private fun ToolCard(entry: Entry) {
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(top = 6.dp),
                     )
+                }
                 }
             }
         }
