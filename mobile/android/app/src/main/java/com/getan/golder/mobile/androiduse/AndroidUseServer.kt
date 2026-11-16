@@ -293,12 +293,6 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         if (!latch.await(5, TimeUnit.SECONDS)) return error("screenshot timed out")
         failure?.let { return error(it) }
         val saved = file ?: return error("screenshot produced no file")
-        service.updateOverlay(
-            "screenshot",
-            service.rootInActiveWindow?.packageName?.toString().orEmpty(),
-            AndroidUseBridge.isPaused(service),
-            saved.absolutePath,
-        )
         return ok("screenshot")
             .put("path", saved.absolutePath)
             .put("size", saved.length())
@@ -312,9 +306,7 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         if (ref.isNotBlank()) {
             val node = lastNodes[ref] ?: return error("unknown node ref")
             sensitiveReason(node)?.let {
-                if (!service.requestOverlayConfirmation("tap", nodeDetail(node))) {
-                    return error("sensitive action '$it' was not confirmed")
-                }
+                return sensitiveHandoff(it)
             }
             runCatching { node.refresh() }
             var target: AccessibilityNodeInfo? = node
@@ -337,9 +329,7 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         val y = request.optInt("y", -1)
         if (x < 0 || y < 0) return error("tap requires ref or x/y")
         sensitiveReason(service.rootInActiveWindow)?.let {
-            if (!service.requestOverlayConfirmation("tap", "tap at $x,$y")) {
-                return error("sensitive action '$it' was not confirmed")
-            }
+            return sensitiveHandoff(it)
         }
         return if (tapAt(x, y)) withForeground(ok("tap")) else error("tap failed")
     }
@@ -352,9 +342,7 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         val node = lastNodes[ref] ?: return error("unknown node ref")
         if (node.isPassword) return error("refusing to type into a password field")
         sensitiveReason(node)?.let {
-            if (!service.requestOverlayConfirmation("type", nodeDetail(node))) {
-                return error("sensitive action '$it' was not confirmed")
-            }
+            return sensitiveHandoff(it)
         }
         runCatching { node.refresh() }
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
@@ -375,9 +363,7 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         packageAllowed(service.rootInActiveWindow?.packageName?.toString().orEmpty())
             .let { if (!it) return error("current package is not in the AndroidUse allowlist") }
         sensitiveReason(service.rootInActiveWindow)?.let {
-            if (!service.requestOverlayConfirmation("swipe", "swipe on the current screen")) {
-                return error("sensitive action '$it' was not confirmed")
-            }
+            return sensitiveHandoff(it)
         }
         val x = request.optInt("x", -1)
         val y = request.optInt("y", -1)
@@ -450,11 +436,6 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             response.optBoolean("ok"),
             response.optString("package"),
             response.optString("error"),
-        )
-        service.updateOverlay(
-            action,
-            response.optString("package"),
-            AndroidUseBridge.isPaused(service),
         )
         AndroidUseNotifier.update(
             service,
@@ -542,6 +523,18 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
 
     private fun error(message: String?): JSONObject =
         JSONObject().put("ok", false).put("error", message ?: "AndroidUse failed")
+
+    /**
+     * A sensitive control action is the person's decision, not the model's. Pause
+     * control and ask for a handoff instead of guessing at consent.
+     */
+    private fun sensitiveHandoff(reason: String): JSONObject {
+        AndroidUseBridge.setPaused(service, true)
+        return error(
+            "sensitive action '$reason' needs the user. Ask them to take over the background display " +
+                "from the live preview, then continue after they hand it back.",
+        )
+    }
 
     private companion object {
         const val MAX_NODES = 300

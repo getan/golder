@@ -17,47 +17,18 @@ class GolderAccessibilityService : AccessibilityService() {
 
     @Volatile
     private var server: AndroidUseServer? = null
-    private var overlay: AndroidUseOverlay? = null
-    private var prefsRegistered = false
 
     @Volatile
     var pairingWindowTexts: List<List<String>> = emptyList()
         private set
 
-    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-        syncOverlay()
-    }
-
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         AndroidUseNotifier.update(this, "ready", "", AndroidUseBridge.isPaused(this))
-        if (!prefsRegistered) {
-            getSharedPreferences(AndroidUseBridge.PREFS_NAME, MODE_PRIVATE)
-                .registerOnSharedPreferenceChangeListener(prefsListener)
-            prefsRegistered = true
-        }
-        syncOverlay()
         if (server == null) {
             server = AndroidUseServer(this).also { it.start() }
         }
-    }
-
-    fun updateOverlay(action: String, packageName: String, paused: Boolean, imagePath: String? = null) {
-        if (AndroidUseBridge.overlayEnabled(this)) {
-            syncOverlay()
-            overlay?.update(action, packageName, paused, imagePath)
-        }
-    }
-
-    fun requestOverlayConfirmation(action: String, detail: String): Boolean {
-        ensureOverlay()
-        val confirmed = overlay?.requestConfirmation(action, detail) ?: false
-        if (!AndroidUseBridge.overlayEnabled(this)) {
-            overlay?.close()
-            overlay = null
-        }
-        return confirmed
     }
 
     internal fun invalidateObservation() {
@@ -114,30 +85,6 @@ class GolderAccessibilityService : AccessibilityService() {
         server?.close()
         server = null
         Phase2Session.disposeDisplay()
-        overlay?.close()
-        overlay = null
-        if (prefsRegistered) {
-            runCatching {
-                getSharedPreferences(AndroidUseBridge.PREFS_NAME, MODE_PRIVATE)
-                    .unregisterOnSharedPreferenceChangeListener(prefsListener)
-            }
-            prefsRegistered = false
-        }
         AndroidUseNotifier.cancel(this)
-    }
-
-    private fun ensureOverlay() {
-        if (overlay == null) {
-            overlay = AndroidUseOverlay(this).also { it.show() }
-        }
-    }
-
-    private fun syncOverlay() {
-        if (AndroidUseBridge.overlayEnabled(this)) {
-            ensureOverlay()
-        } else {
-            overlay?.close()
-            overlay = null
-        }
     }
 }

@@ -155,7 +155,6 @@ private fun GolderApp(initialTask: String = "") {
     var androidUseAudit by remember { mutableStateOf("") }
     var androidUseEndpointReady by remember { mutableStateOf(false) }
     var androidUseAllowedPackages by remember { mutableStateOf("") }
-    var androidUseOverlayEnabled by remember { mutableStateOf(true) }
     var androidUseAdvancedEnabled by remember { mutableStateOf(false) }
     var androidUseBackgroundStatus by remember { mutableStateOf("") }
     val backgroundPreview by BackgroundPreview.state.collectAsState()
@@ -206,7 +205,6 @@ private fun GolderApp(initialTask: String = "") {
         androidUseAudit = AndroidUseBridge.recentAudit(context)
         androidUseEndpointReady = AndroidUseBridge.endpointReady(context)
         androidUseAllowedPackages = AndroidUseBridge.allowedPackages(context).joinToString(",")
-        androidUseOverlayEnabled = AndroidUseBridge.overlayEnabled(context)
         androidUseAdvancedEnabled = AndroidUseBridge.advancedEnabled(context)
     }
 
@@ -779,7 +777,6 @@ private fun GolderApp(initialTask: String = "") {
                 androidUseAudit = androidUseAudit,
                 androidUseEndpointReady = androidUseEndpointReady,
                 androidUseAllowedPackages = androidUseAllowedPackages,
-                androidUseOverlayEnabled = androidUseOverlayEnabled,
                 androidUseAdvancedEnabled = androidUseAdvancedEnabled,
                 androidUseBackgroundStatus = androidUseBackgroundStatus,
                 onAndroidUsePair = { openSystemPairing() },
@@ -872,10 +869,6 @@ private fun GolderApp(initialTask: String = "") {
                 },
                 onAndroidUseControl = { allowed ->
                     AndroidUseBridge.setControlAllowed(context, allowed)
-                    refreshAndroidUseState()
-                },
-                onAndroidUseOverlay = { enabled ->
-                    AndroidUseBridge.setOverlayEnabled(context, enabled)
                     refreshAndroidUseState()
                 },
                 onAndroidUseAdvanced = { enabled ->
@@ -1696,7 +1689,6 @@ private fun SettingsScreen(
     androidUseAudit: String,
     androidUseEndpointReady: Boolean,
     androidUseAllowedPackages: String,
-    androidUseOverlayEnabled: Boolean,
     androidUseAdvancedEnabled: Boolean,
     androidUseBackgroundStatus: String,
     onAndroidUsePair: () -> Unit,
@@ -1715,7 +1707,6 @@ private fun SettingsScreen(
     onAndroidUseSettings: () -> Unit,
     onAndroidUseRefresh: () -> Unit,
     onAndroidUseControl: (Boolean) -> Unit,
-    onAndroidUseOverlay: (Boolean) -> Unit,
     onAndroidUseAdvanced: (Boolean) -> Unit,
     onAndroidUseAllowedPackages: (String) -> Unit,
     onForgetToken: () -> Unit,
@@ -1807,28 +1798,6 @@ private fun SettingsScreen(
                 } else {
                     if (androidUseDetailsExpanded) "Hide additional options" else "Additional options"
                 })
-            }
-            if (androidUseDetailsExpanded) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    s.androidUseOverlay,
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Switch(
-                    checked = androidUseOverlayEnabled,
-                    onCheckedChange = onAndroidUseOverlay,
-                    enabled = androidUseEnabled,
-                )
-            }
-            Text(
-                s.androidUseOverlayHint,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
             }
             Text(s.androidUseStepAccessibility, style = MaterialTheme.typography.titleSmall)
             val live = androidUseLive

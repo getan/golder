@@ -176,7 +176,7 @@ Phase 1 使用 **loopback TCP + 每进程随机 token**，而不是 Android `Loc
 - 审计文件最多保留 200 条；Settings 只展示最近 8 条，并默认折叠。
 - 包 allowlist：留空允许所有 App，非空时只允许列出的包名。
 
-已增加 AndroidUse 常驻状态通知和 Accessibility overlay：显示当前动作/包名、最近截图，并在 overlay 上提供 Pause/Resume/Hide。Settings 有“显示 AndroidUse 悬浮层”开关；关闭后不常驻，但敏感动作仍会临时拉起 Allow once / Deny 确认面板。拒绝或超时则失败关闭。
+已增加 AndroidUse 常驻状态通知：显示当前动作和包名。此前用作敏感操作确认的悬浮层已删除（Mika 的浮层是胶囊入口，不是确认面板）：遇到支付、删除、验证码一类的敏感控件时，服务会暂停控制并把控制权交还用户，由用户在后台画面的“接管操作”里自行处理，交还后再继续。
 
 Settings 还通过 **服务 heartbeat + loopback status probe** 检测“无障碍已启用但服务未绑定”：只有 heartbeat 新鲜或 bridge 应答成功才显示已连接；否则显示未连接，并提供“重新绑定无障碍”按钮和操作说明。App 回到前台时会重新检查。仍未完成：完整 OEM 设备矩阵和真实长时任务验收。
 

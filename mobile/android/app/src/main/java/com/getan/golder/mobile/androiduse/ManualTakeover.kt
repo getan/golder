@@ -21,6 +21,7 @@ internal object ManualTakeover {
     private val mutableState = MutableStateFlow(State())
     val state: StateFlow<State> = mutableState.asStateFlow()
     private var pausedHandle = 0
+    private var app: Context? = null
     @Volatile private var cancelled = false
 
     @Synchronized
@@ -28,6 +29,7 @@ internal object ManualTakeover {
         if (mutableState.value.stage != Stage.IDLE) return
         cancelled = false
         pausedHandle = handle
+        this.app = context.applicationContext
         mutableState.value = State(Stage.WAITING, displayId)
         val app = context.applicationContext
         scope.launch {
@@ -86,6 +88,9 @@ internal object ManualTakeover {
         scope.launch {
             // Waits for an in-flight manual gesture before releasing the lease.
             Phase2Session.endManual()
+            // A sensitive action paused control so the person could decide; that
+            // pause ends with the handback, and the next action must re-observe.
+            app?.let { AndroidUseBridge.setPaused(it, false) }
             val resumed = handle == 0 || runCatching { GolderNative.resumeAfterTakeover(handle) == 0 }.getOrDefault(false)
             synchronized(this@ManualTakeover) {
                 pausedHandle = 0

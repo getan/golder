@@ -14,7 +14,6 @@ object AndroidUseBridge {
     private const val CONTROL_KEY = "control-allowed"
     private const val PAUSED_KEY = "paused"
     private const val ALLOWED_PACKAGES_KEY = "allowed-packages"
-    private const val OVERLAY_KEY = "overlay-enabled"
     private const val ADVANCED_KEY = "advanced-enabled"
     const val PREFS_NAME = "android-use"
 
@@ -96,13 +95,6 @@ object AndroidUseBridge {
 
     fun setAllowedPackages(context: Context, value: String) {
         prefs(context).edit().putString(ALLOWED_PACKAGES_KEY, value).apply()
-    }
-
-    fun overlayEnabled(context: Context): Boolean =
-        prefs(context).getBoolean(OVERLAY_KEY, true)
-
-    fun setOverlayEnabled(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(OVERLAY_KEY, enabled).apply()
     }
 
     fun advancedEnabled(context: Context): Boolean =
