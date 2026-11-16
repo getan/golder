@@ -57,7 +57,7 @@ func (t *Tool) Name() string { return "android_use" }
 
 func (t *Tool) Description() string {
 	if t.phase2Enabled {
-		return "Operate the visible phone screen using observe and the returned snapshotId and node refs, or use the separately enabled background display. For background control, use background_status, background_start, background_open_app, background_observe and background_tap. Observe the background display before acting and after the person hands it back; pass its snapshotId to the next background action and never replay an earlier action. Release the display with background_release and stop the helper with background_stop. Background control requires explicit user consent."
+		return "Operate another app in the background display by default, so the person keeps their own screen: background_status, background_start, background_open_app, background_observe and background_tap. Observe before acting and after the person hands the display back; pass its snapshotId to the next background action and never replay an earlier action. Use visible-screen observe/tap/type only when the person wants to watch, when background control is unavailable, or after resolving a background refusal. Release the display with background_release and stop the helper with background_stop. Background control requires explicit user consent."
 	}
 	return "Observe and operate the user's visible Android app through a user-enabled AccessibilityService. Observe first, then act with the returned snapshotId and node ref. Use open_app/back/home for navigation; sensitive actions still require the user's judgment."
 }
