@@ -98,6 +98,9 @@ func ModelWire(model string) Wire {
 // capability list, not a rule about models; SelectWire decides which one a run
 // uses.
 func ProviderWires(spec ProviderSpec) []Wire {
+	if spec.LockedWire != "" {
+		return []Wire{spec.LockedWire}
+	}
 	served := map[Wire]bool{}
 	if w := wireForProtocol(spec.Protocol); w != "" {
 		served[w] = true
@@ -129,6 +132,9 @@ func ProviderWires(spec ProviderSpec) []Wire {
 // An explicit --protocol is not handled here: the resolver validates it with
 // AllowsProtocol and keeps the user's choice verbatim.
 func SelectWire(spec ProviderSpec, model string) Wire {
+	if spec.LockedWire != "" {
+		return spec.LockedWire
+	}
 	if w, ok := staticWire(spec, model); ok {
 		return w
 	}

@@ -63,6 +63,12 @@ type ProviderSpec struct {
 	// been verified — the registry's word is what turns "explicitly requested"
 	// into "known to exist".
 	WireVariants []WireVariant
+	// LockedWire, when set, is the only wire this provider's endpoint can serve,
+	// overriding model-native heuristics. It exists for special-auth endpoints
+	// whose composed URL supports one shape (Azure OpenAI builds a
+	// deployment/version path that the shared driver appends /chat/completions
+	// to), so the banner and status bar agree with the driver that runs.
+	LockedWire Wire
 	// ExtraHeaders are provider-specific headers attached to every request (may
 	// be nil).
 	ExtraHeaders map[string]string
@@ -447,6 +453,8 @@ var providerRegistry = []ProviderSpec{
 		// per the Azure OpenAI convention; there is no fixed public default.
 		DefaultBaseURL: "",
 		Protocol:       ProtocolOpenAI,
+		// The composed endpoint speaks Chat Completions only; see LockedWire.
+		LockedWire:     WireChat,
 		AuthScheme:     AuthAzure,
 		BaseURLEnvVars: []string{"AZURE_OPENAI_BASE_URL"},
 		// The endpoint's OpenAI family tops out at GPT-6.1 Sol. The deployment
