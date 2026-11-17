@@ -255,7 +255,7 @@ func (u *Updater) fetch(ctx context.Context, original, name string, out io.Write
 			}
 			break
 		}
-		body, err := u.download(ctx, src)
+		body, err := u.download(ctx, src, name, out)
 		if err == nil && ok != nil {
 			err = ok(body)
 		}
@@ -280,7 +280,7 @@ func (u *Updater) fetch(ctx context.Context, original, name string, out io.Write
 // warning — that is the tradeoff the mirrors exist for, now made visible —
 // while any disagreement aborts as possible tampering.
 func (u *Updater) fetchChecksums(ctx context.Context, original, archive string, out io.Writer) (string, error) {
-	if body, err := u.download(ctx, original); err == nil {
+	if body, err := u.download(ctx, original, checksumsFile, out); err == nil {
 		return checksumFor(body, archive)
 	} else if out != nil {
 		fmt.Fprintf(out, "  checksums.txt via %s failed (%v), cross-checking mirrors ...\n",
@@ -301,7 +301,7 @@ func (u *Updater) fetchChecksums(ctx context.Context, original, archive string, 
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		body, err := u.download(ctx, src)
+		body, err := u.download(ctx, src, checksumsFile, out)
 		if err != nil {
 			if out != nil {
 				fmt.Fprintf(out, "  checksums.txt via %s failed (%v)\n", sourceHost(src), shortErr(err))
@@ -389,7 +389,7 @@ func shortErr(err error) error {
 // Content-Length and it has been received in full, the rate check stands
 // down: a short final window would otherwise charge a finished transfer's
 // tail to the floor and abort it just before EOF.
-func (u *Updater) download(ctx context.Context, url string) ([]byte, error) {
+func (u *Updater) download(ctx context.Context, url, name string, out io.Writer) ([]byte, error) {
 	window := u.RateWindow
 	if window <= 0 {
 		window = defaultRateWindow
@@ -406,7 +406,24 @@ func (u *Updater) download(ctx context.Context, url string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if out != nil {
+		fmt.Fprintf(out, "  %s: connecting to %s ...\n", name, sourceHost(url))
+	}
+	// Do includes DNS, redirects and waiting for response headers. The body
+	// watchdog below cannot run until Do returns, so bound this phase too.
+	headerTimeout := make(chan struct{})
+	timer := time.AfterFunc(window, func() {
+		cancel()
+		close(headerTimeout)
+	})
 	resp, err := u.HTTPClient.Do(req)
+	if !timer.Stop() {
+		<-headerTimeout
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return nil, fmt.Errorf("no response headers for %s", window)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -481,14 +498,22 @@ func (u *Updater) download(ctx context.Context, url string) ([]byte, error) {
 
 	var buf bytes.Buffer
 	chunk := make([]byte, 32*1024)
+	lastProgress := time.Now()
 	for {
 		n, err := resp.Body.Read(chunk)
 		if n > 0 {
 			total.Add(int64(n))
 			firstByte.CompareAndSwap(0, time.Now().UnixNano())
 			buf.Write(chunk[:n])
+			if out != nil && time.Since(lastProgress) >= time.Second {
+				writeDownloadProgress(out, name, sourceHost(url), total.Load(), contentLength)
+				lastProgress = time.Now()
+			}
 		}
 		if err == io.EOF {
+			if out != nil {
+				writeDownloadProgress(out, name, sourceHost(url), total.Load(), contentLength)
+			}
 			return buf.Bytes(), nil
 		}
 		if err != nil {
@@ -497,6 +522,31 @@ func (u *Updater) download(ctx context.Context, url string) ([]byte, error) {
 			}
 			return nil, err
 		}
+	}
+}
+
+// writeDownloadProgress uses newline-delimited updates so redirected output and
+// host interfaces remain readable. A missing Content-Length has no percentage.
+func writeDownloadProgress(out io.Writer, name, host string, received, size int64) {
+	if size > 0 {
+		percent := float64(received) * 100 / float64(size)
+		if percent > 100 {
+			percent = 100
+		}
+		fmt.Fprintf(out, "  %s via %s: %s / %s (%.0f%%)\n", name, host, downloadSize(received), downloadSize(size), percent)
+		return
+	}
+	fmt.Fprintf(out, "  %s via %s: %s downloaded\n", name, host, downloadSize(received))
+}
+
+func downloadSize(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
 	}
 }
 

@@ -123,8 +123,14 @@ func TestApplyEndToEnd(t *testing.T) {
 		t.Fatalf("BeforeReplace failure modified target: %q", got)
 	}
 	u.BeforeReplace = nil
-	if err := u.Apply(context.Background(), "v0.4.0", &bytes.Buffer{}); err != nil {
+	var out bytes.Buffer
+	if err := u.Apply(context.Background(), "v0.4.0", &out); err != nil {
 		t.Fatalf("Apply: %v", err)
+	}
+	for _, want := range []string{"checksums.txt: connecting", archiveName + ": connecting", "(100%)"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("progress missing %q in %q", want, out.String())
+		}
 	}
 	got, _ := os.ReadFile(target)
 	if !bytes.Equal(got, binary) {
@@ -250,6 +256,61 @@ func TestApplyFallsBackToMirror(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "trying") {
 		t.Errorf("expected a fallback notice, got:\n%s", out.String())
+	}
+}
+
+func TestDownloadProgressUnknownLength(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush() // Force chunked transfer without Content-Length.
+		_, _ = w.Write([]byte("payload"))
+	}))
+	defer srv.Close()
+	u := &Updater{HTTPClient: srv.Client()}
+	var out bytes.Buffer
+	if _, err := u.download(context.Background(), srv.URL, "archive", &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "7 B downloaded") || strings.Contains(out.String(), "%") {
+		t.Fatalf("unexpected progress for unknown length: %q", out.String())
+	}
+}
+
+func TestDownloadProgressDuringTransfer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "4")
+		_, _ = w.Write([]byte("ab"))
+		w.(http.Flusher).Flush()
+		time.Sleep(1100 * time.Millisecond)
+		_, _ = w.Write([]byte("c"))
+		w.(http.Flusher).Flush()
+		time.Sleep(100 * time.Millisecond)
+		_, _ = w.Write([]byte("d"))
+	}))
+	defer srv.Close()
+	u := &Updater{HTTPClient: srv.Client(), RateWindow: 3 * time.Second}
+	var out bytes.Buffer
+	if _, err := u.download(context.Background(), srv.URL, "archive", &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "(75%)") || !strings.Contains(out.String(), "(100%)") || !strings.Contains(out.String(), "archive: connecting") {
+		t.Fatalf("missing progress: %q", out.String())
+	}
+}
+
+func TestDownloadTimesOutBeforeResponseHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	u := &Updater{HTTPClient: srv.Client(), RateWindow: 100 * time.Millisecond}
+	start := time.Now()
+	_, err := u.download(context.Background(), srv.URL, "test", nil)
+	if err == nil || !strings.Contains(err.Error(), "no response headers") {
+		t.Fatalf("download error = %v, want response headers timeout", err)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("download did not promptly time out")
 	}
 }
 
