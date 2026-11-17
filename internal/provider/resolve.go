@@ -51,7 +51,23 @@ func ResolveProvider(model, baseURL, protocol, providerName string, env func(str
 	// tool calls (streamretry.go). Provider-executed tools are never replayed.
 	// It is applied
 	// here, at the boundary, so no provider entry point can forget it.
-	return withStreamRetry(p, protocolWire(protocol)), name, nil
+	// The initial wire is only a fallback for a driver that cannot report its own
+	// (see WireReporter); prefer the resolved provider's answer, then the
+	// provider's declared protocol, so an auto-resolved provider is not labelled
+	// Chat just because no --protocol was given.
+	initial := protocolWire(protocol)
+	if wr, ok := p.(WireReporter); ok {
+		if w := wr.CurrentWire(); w != "" {
+			initial = w
+		}
+	} else if strings.TrimSpace(protocol) == "" {
+		if spec, ok := LookupProviderSpec(name); ok {
+			if w := wireForProtocol(spec.Protocol); w != "" {
+				initial = w
+			}
+		}
+	}
+	return withStreamRetry(p, initial), name, nil
 }
 
 // protocolWire maps an explicit protocol selector to the wire it names; an empty
