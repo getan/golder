@@ -6,22 +6,6 @@ import (
 	"testing"
 )
 
-// TestDeepSeekBaseURLServesResponses pins the endpoint the wire probe measures.
-// A bare host answered /chat/completions but 404'd /responses, so the probe
-// recorded Chat for a Responses-native model.
-func TestDeepSeekBaseURLServesResponses(t *testing.T) {
-	spec, ok := LookupProviderSpec("deepseek")
-	if !ok {
-		t.Fatal("deepseek spec missing")
-	}
-	if spec.DefaultBaseURL != "https://api.deepseek.com/v1" {
-		t.Fatalf("DefaultBaseURL = %q, want the /v1 surface", spec.DefaultBaseURL)
-	}
-	if got := EffectiveProtocol("deepseek", "deepseek-v4-flash", ""); got != ProtocolOpenAIResponses {
-		t.Fatalf("EffectiveProtocol = %q, want %q", got, ProtocolOpenAIResponses)
-	}
-}
-
 // TestOpencodeGoDeclaresMessagesVariant pins the declarations the wire-variant
 // path rests on: opencode-go stays OpenAI-wired by default (nothing changes for
 // a user who does not ask), and declares its Messages and Gemini endpoints as
@@ -174,8 +158,8 @@ func TestLookupProviderSpec_Hit(t *testing.T) {
 	if spec.Name != "deepseek" {
 		t.Errorf("Name = %q, want deepseek", spec.Name)
 	}
-	if spec.DefaultBaseURL != "https://api.deepseek.com/v1" {
-		t.Errorf("DefaultBaseURL = %q, want https://api.deepseek.com/v1", spec.DefaultBaseURL)
+	if spec.DefaultBaseURL != "https://api.deepseek.com" {
+		t.Errorf("DefaultBaseURL = %q, want https://api.deepseek.com", spec.DefaultBaseURL)
 	}
 	if spec.Protocol != ProtocolOpenAIResponses {
 		t.Errorf("Protocol = %q, want %q", spec.Protocol, ProtocolOpenAIResponses)

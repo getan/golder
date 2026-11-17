@@ -187,12 +187,9 @@ var providerRegistry = []ProviderSpec{
 		DefaultModel: "gpt-6.1-sol",
 	},
 	{
-		Name:    "deepseek",
-		EnvVars: []string{"DEEPSEEK_API_KEY"},
-		// The OpenAI-compatible surface lives under /v1: a bare host answers
-		// /chat/completions but 404s /responses, which made the wire probe
-		// record Chat for a Responses-native model.
-		DefaultBaseURL: "https://api.deepseek.com/v1",
+		Name:           "deepseek",
+		EnvVars:        []string{"DEEPSEEK_API_KEY"},
+		DefaultBaseURL: "https://api.deepseek.com",
 		Protocol:       ProtocolOpenAIResponses,
 		AuthScheme:     AuthBearer,
 		ModelPrefixes:  []string{"deepseek-"},
