@@ -85,6 +85,7 @@ require (
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/kenshaw/rasterm v0.1.17 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
+	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/lrstanley/bubbletint/v2 v2.0.2 // indirect
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
@@ -114,12 +115,14 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
+	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark v1.8.2 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
+	go.digitalxero.dev/rpm v0.3.4 // indirect
 	go.mitchellh.com/libghostty v0.0.0-20260920220152-31b65cdc24cf // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
