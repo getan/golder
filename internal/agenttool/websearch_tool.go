@@ -54,6 +54,13 @@ type WebSearchTool struct {
 	getenv func(string) string
 }
 
+// NewWebSearchTool builds a search tool whose backend credentials come from
+// getenv. A nil getenv keeps os.Getenv; the Android host passes its own
+// encrypted store so keys never enter the process environment.
+func NewWebSearchTool(getenv func(string) string) *WebSearchTool {
+	return &WebSearchTool{getenv: getenv}
+}
+
 // webSearchArgs is the decoded argument shape for WebSearchTool.
 type webSearchArgs struct {
 	// Query is the search query (required).

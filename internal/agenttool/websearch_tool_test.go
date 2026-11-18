@@ -172,3 +172,15 @@ func TestWebSearchBackendError(t *testing.T) {
 		t.Errorf("want backend-failed error, got:\n%s", resultText(res))
 	}
 }
+
+func TestNewWebSearchToolUsesInjectedCredentials(t *testing.T) {
+	tool := NewWebSearchTool(func(name string) string {
+		if name == "TAVILY_API_KEY" {
+			return "test-key"
+		}
+		return ""
+	})
+	if got := selectSearchBackend(tool.getenv).name(); got != "tavily" {
+		t.Fatalf("backend = %q, want tavily from the injected key", got)
+	}
+}

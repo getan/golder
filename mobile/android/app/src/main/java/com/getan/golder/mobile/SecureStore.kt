@@ -23,6 +23,8 @@ object SecureStore {
     private const val OAUTH_REFRESH_KEY = "github-oauth-refresh"
     private const val OAUTH_EXPIRES_KEY = "github-oauth-expires"
     private const val API_KEY = "model-api-key"
+    private const val TAVILY_KEY = "tavily-api-key"
+    private const val EXA_KEY = "exa-api-key"
     private const val KEY_ALIAS = "golder-mobile-secrets"
     private const val TRANSFORM = "AES/GCM/NoPadding"
     private const val GCM_TAG_BITS = 128
@@ -81,6 +83,16 @@ object SecureStore {
     fun getAPIKey(context: Context): String = read(context, API_KEY)
 
     fun clearAPIKey(context: Context) = clear(context, API_KEY)
+
+    fun saveTavilyKey(context: Context, key: String): Boolean =
+        save(context, TAVILY_KEY, key)
+
+    fun getTavilyKey(context: Context): String = read(context, TAVILY_KEY)
+
+    fun saveExaKey(context: Context, key: String): Boolean =
+        save(context, EXA_KEY, key)
+
+    fun getExaKey(context: Context): String = read(context, EXA_KEY)
 
     private fun save(context: Context, keyName: String, value: String): Boolean = runCatching {
         if (value.isBlank()) {

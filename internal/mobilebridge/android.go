@@ -14,6 +14,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/androidagent"
+	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/mobileagent"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
@@ -87,6 +88,16 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 		GitToken:           cfg.GitToken,
 		AndroidUseEndpoint: cfg.AndroidUseEndpoint,
 		AndroidUsePhase2:   cfg.AndroidUsePhase2,
+		SearchEnv: func(name string) string {
+			switch name {
+			case "TAVILY_API_KEY":
+				return cfg.TavilyAPIKey
+			case "EXA_API_KEY":
+				return cfg.ExaAPIKey
+			default:
+				return ""
+			}
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -146,6 +157,7 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 		History:       history,
 		Batch:         toolset.Batch,
 		ContextWindow: contextWindow,
+		Compaction:    compaction.DefaultCompactionSettings,
 		ObserveEvent:  observe,
 		ThinkingLevel: agentcore.ThinkingLevel(cfg.ThinkingLevel),
 		Permissions:   permissionState,

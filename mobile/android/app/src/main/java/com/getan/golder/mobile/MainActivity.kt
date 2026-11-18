@@ -87,6 +87,7 @@ data class Entry(
     val toolOutput: String = "",
     val toolError: Boolean = false,
     val toolDone: Boolean = false,
+    val toolImage: android.graphics.Bitmap? = null,
 )
 
 data class TodoItem(val content: String, val status: String)
@@ -184,6 +185,8 @@ private fun GolderApp(initialTask: String = "") {
     var language by remember { mutableStateOf("en") }
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
+    var tavilyKey by remember { mutableStateOf("") }
+    var exaKey by remember { mutableStateOf("") }
     var gitToken by remember { mutableStateOf("") }
     var oauthConnected by remember { mutableStateOf(false) }
     var oauthBusy by remember { mutableStateOf(false) }
@@ -298,12 +301,14 @@ private fun GolderApp(initialTask: String = "") {
             val msg = messages.getJSONObject(i)
             val role = msg.optString("role")
             val content = msg.optJSONArray("content")
+            var image: android.graphics.Bitmap? = null
             val text = buildString {
                 if (content != null) {
                     for (j in 0 until content.length()) {
                         val block = content.getJSONObject(j)
                         when (block.optString("type")) {
                             "text" -> append(block.optString("text"))
+                            "image" -> image = decodeToolImage(block.optString("data"), block.optString("mimeType"))
                             "toolCall" -> {
                                 val id = block.optString("id")
                                 val name = block.optString("name").ifBlank { "tool" }
@@ -335,6 +340,7 @@ private fun GolderApp(initialTask: String = "") {
                             toolCommand = known?.second ?: name,
                             toolOutput = text.take(1200),
                             toolDone = true,
+                            toolImage = image,
                         ),
                     )
                 }
@@ -421,6 +427,8 @@ private fun GolderApp(initialTask: String = "") {
             withContext(Dispatchers.IO) {
                 SecureStore.saveToken(context, workspaceToken)
                 SecureStore.saveAPIKey(context, apiKey)
+                SecureStore.saveTavilyKey(context, tavilyKey)
+                SecureStore.saveExaKey(context, exaKey)
             }
             SettingsStore.save(context, provider, model, thinking, baseUrl, permissionMode, language)
             val config = JSONObject()
@@ -434,6 +442,8 @@ private fun GolderApp(initialTask: String = "") {
                 .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
                 .put("allowNetworkGit", true)
                 .put("gitToken", workspaceToken)
+            if (tavilyKey.isNotBlank()) config.put("tavilyApiKey", tavilyKey)
+            if (exaKey.isNotBlank()) config.put("exaApiKey", exaKey)
             // The catalog is fixed when the session opens, so remember what this
             // session actually got; a later change triggers a rebuild.
             val attachAndroidUse = AndroidUseBridge.isEnabled(context) &&
@@ -543,6 +553,8 @@ private fun GolderApp(initialTask: String = "") {
         oauthConnected = withContext(Dispatchers.IO) { GitHubOAuth.isConnected(context) }
         refreshAndroidUseState()
         apiKey = withContext(Dispatchers.IO) { SecureStore.getAPIKey(context) }
+        tavilyKey = withContext(Dispatchers.IO) { SecureStore.getTavilyKey(context) }
+        exaKey = withContext(Dispatchers.IO) { SecureStore.getExaKey(context) }
         tokenLoaded = true
 
         val saved = SettingsStore.load(context)
@@ -666,6 +678,21 @@ private fun GolderApp(initialTask: String = "") {
                         }
                         "text" -> appendAssistant(event.optString("text"))
                         "thinking" -> add("thinking", event.optString("text"))
+                        "compaction_start" -> {
+                            status = if (language == "zh") "正在压缩上下文…" else "Compacting context…"
+                        }
+                        "compaction" -> {
+                            val failed = event.optBoolean("isError") || event.optString("error").isNotBlank()
+                            if (failed) {
+                                val err = event.optString("error").ifBlank { event.optString("text") }
+                                add(
+                                    "status",
+                                    (if (language == "zh") "上下文压缩失败：" else "Context compaction failed: ") + err,
+                                )
+                            } else {
+                                add("status", if (language == "zh") "上下文已压缩" else "Context compacted")
+                            }
+                        }
                         "tool_start" -> {
                             val name = event.optString("toolName").ifBlank { "tool" }
                             val args = event.optJSONObject("args")
@@ -681,6 +708,7 @@ private fun GolderApp(initialTask: String = "") {
                             val name = event.optString("toolName").ifBlank { "tool" }
                             val output = event.optString("text").take(1200)
                             val isError = event.optBoolean("isError")
+                            val image = decodeToolImage(event.optString("image"), event.optString("imageMime"))
                             val index = entries.indexOfLast {
                                 it.kind == "tool" && it.toolName == name && !it.toolDone
                             }
@@ -689,6 +717,7 @@ private fun GolderApp(initialTask: String = "") {
                                     toolOutput = output,
                                     toolError = isError,
                                     toolDone = true,
+                                    toolImage = image,
                                 )
                             } else {
                                 entries.add(
@@ -698,6 +727,7 @@ private fun GolderApp(initialTask: String = "") {
                                         toolOutput = output,
                                         toolError = isError,
                                         toolDone = true,
+                                        toolImage = image,
                                     ),
                                 )
                             }
@@ -815,6 +845,8 @@ private fun GolderApp(initialTask: String = "") {
                 language = language,
                 baseUrl = baseUrl,
                 apiKey = apiKey,
+                tavilyKey = tavilyKey,
+                exaKey = exaKey,
                 gitToken = gitToken,
                 tokenLoaded = tokenLoaded,
                 oauthConnected = oauthConnected,
@@ -860,6 +892,14 @@ private fun GolderApp(initialTask: String = "") {
                     apiKey = key
                     SettingsStore.save(context, provider, model, thinking, url, permissionMode, language)
                     scope.launch(Dispatchers.IO) { SecureStore.saveAPIKey(context, key) }
+                },
+                onSearchKeysChange = { tavily, exa ->
+                    tavilyKey = tavily
+                    exaKey = exa
+                    scope.launch(Dispatchers.IO) {
+                        SecureStore.saveTavilyKey(context, tavily)
+                        SecureStore.saveExaKey(context, exa)
+                    }
                 },
                 onTokenChange = { value ->
                     gitToken = value
@@ -1447,6 +1487,14 @@ private fun ToolGroupCard(entries: List<Entry>, selectionEpoch: Int) {
     }
 }
 
+private fun decodeToolImage(data: String, mime: String): android.graphics.Bitmap? {
+    if (data.isBlank() || !mime.startsWith("image/")) return null
+    return runCatching {
+        val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+    }.getOrNull()
+}
+
 @Composable
 private fun ToolCard(entry: Entry, selectionEpoch: Int) {
     val context = LocalContext.current
@@ -1523,6 +1571,17 @@ private fun ToolCard(entry: Entry, selectionEpoch: Int) {
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+                entry.toolImage?.let { bitmap ->
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp)
+                            .heightIn(max = 240.dp),
+                        contentScale = ContentScale.Fit,
                     )
                 }
                 }
@@ -1846,6 +1905,8 @@ private fun SettingsScreen(
     language: String,
     baseUrl: String,
     apiKey: String,
+    tavilyKey: String,
+    exaKey: String,
     gitToken: String,
     tokenLoaded: Boolean,
     oauthConnected: Boolean,
@@ -1872,6 +1933,7 @@ private fun SettingsScreen(
     onPermissionPick: (String) -> Unit,
     onLanguagePick: (String) -> Unit,
     onConnectionPick: (String, String) -> Unit,
+    onSearchKeysChange: (String, String) -> Unit,
     onTokenChange: (String) -> Unit,
     onGitHubLogin: () -> Unit,
     onGitHubLogout: () -> Unit,
@@ -1939,6 +2001,47 @@ private fun SettingsScreen(
                 baseUrl = baseUrl,
                 apiKey = apiKey,
                 onPick = onConnectionPick,
+            )
+            Text(
+                if (language == "zh") "网页搜索（可选）" else "Web search (optional)",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            OutlinedTextField(
+                value = tavilyKey,
+                onValueChange = { onSearchKeysChange(it, exaKey) },
+                label = { Text("Tavily API key") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                if (language == "zh") "申请地址：https://tavily.com（有免费额度）"
+                else "Get a key: https://tavily.com (free tier)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedTextField(
+                value = exaKey,
+                onValueChange = { onSearchKeysChange(tavilyKey, it) },
+                label = { Text("Exa API key") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                if (language == "zh") "申请地址：https://exa.ai"
+                else "Get a key: https://exa.ai",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                if (language == "zh") {
+                    "填一个即可；都不填时 websearch 使用无需密钥的 DuckDuckGo，部分网络可能不可用。密钥由 Android Keystore 加密保存。"
+                } else {
+                    "One key is enough. Without either, websearch uses the keyless DuckDuckGo fallback, which may be unreachable on some networks. Keys are stored with Android Keystore."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(s.permissions, style = MaterialTheme.typography.titleMedium)
             PermissionModePicker(

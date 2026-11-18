@@ -55,6 +55,11 @@ type Config struct {
 	// AndroidUsePhase2 enables the separately consented background-display
 	// surface. It is ignored unless AndroidUseEndpoint is also present.
 	AndroidUsePhase2 bool `json:"androidUsePhase2,omitempty"`
+	// TavilyAPIKey and ExaAPIKey select the web-search backend. Empty values
+	// leave the keyless DuckDuckGo fallback; keys are passed to the tool, never
+	// written to the environment.
+	TavilyAPIKey string `json:"tavilyApiKey,omitempty"`
+	ExaAPIKey    string `json:"exaApiKey,omitempty"`
 	// DebugLog is an optional host-only diagnostic path. The Android backend
 	// appends loop event types and terminal errors (never prompts or secrets)
 	// to it. Empty disables the log.

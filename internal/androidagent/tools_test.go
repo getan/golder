@@ -34,6 +34,18 @@ func hasTool(s *Toolset, name string) bool {
 	return ok
 }
 
+func TestWebAndImageToolsAreInTheAndroidCatalog(t *testing.T) {
+	s, err := newToolset(Config{Root: t.TempDir(), BeforeToolCall: allowReadOnly}, fakeLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"view_image", "webfetch", "websearch", "get_context_remaining", "new_context"} {
+		if !hasTool(s, name) {
+			t.Errorf("Android catalog is missing %q", name)
+		}
+	}
+}
+
 func TestCapabilitiesSelectCatalogAndPrompt(t *testing.T) {
 	for _, tc := range []struct {
 		name                  string

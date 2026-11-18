@@ -20,13 +20,15 @@ import (
 
 // Event types carried across the host boundary.
 const (
-	EventRunStart     = "run_start"
-	EventText         = "text"
-	EventThinking     = "thinking"
-	EventToolStart    = "tool_start"
-	EventToolUpdate   = "tool_update"
-	EventToolEnd      = "tool_end"
-	EventContextUsage = "context_usage"
+	EventRunStart        = "run_start"
+	EventText            = "text"
+	EventThinking        = "thinking"
+	EventToolStart       = "tool_start"
+	EventToolUpdate      = "tool_update"
+	EventToolEnd         = "tool_end"
+	EventContextUsage    = "context_usage"
+	EventCompactionStart = "compaction_start"
+	EventCompaction      = "compaction"
 	// EventQueued says a prompt arrived while a run was active and will be
 	// delivered at the next turn boundary (TUI-style steering).
 	EventQueued = "queued"
@@ -39,10 +41,14 @@ const (
 // are JSON-safe so a JNI/Objective-C bridge can forward the marshaled value
 // without inspecting Go types.
 type Event struct {
-	Seq           uint64          `json:"seq"`
-	RunID         string          `json:"runId,omitempty"`
-	Type          string          `json:"type"`
-	Text          string          `json:"text,omitempty"`
+	Seq   uint64 `json:"seq"`
+	RunID string `json:"runId,omitempty"`
+	Type  string `json:"type"`
+	Text  string `json:"text,omitempty"`
+	// Image and ImageMime carry the first image block of a tool result, e.g.
+	// view_image. The tool already bounds the encoded size.
+	Image         string          `json:"image,omitempty"`
+	ImageMime     string          `json:"imageMime,omitempty"`
 	ToolCallID    string          `json:"toolCallId,omitempty"`
 	ToolName      string          `json:"toolName,omitempty"`
 	Args          json.RawMessage `json:"args,omitempty"`
@@ -384,12 +390,21 @@ func (s *Session) run(ctx context.Context, runID string) {
 					RunID: runID, Type: EventContextUsage,
 					ContextTokens: e.Tokens, ContextWindow: e.Window,
 				})
+			case agentcore.CompactionStartEvent:
+				s.append(Event{RunID: runID, Type: EventCompactionStart, Text: e.Reason, ContextTokens: e.TokensBefore})
+			case agentcore.CompactionEvent:
+				s.append(Event{
+					RunID: runID, Type: EventCompaction,
+					Text:  fmt.Sprintf("%d → %d tokens, %d summarized, %d kept", e.TokensBefore, e.TokensAfter, e.SummarizedCount, e.KeptCount),
+					Error: e.ErrorMessage, IsError: e.ErrorMessage != "",
+				})
 			case agentcore.ToolExecutionUpdateEvent:
 				s.append(Event{RunID: runID, Type: EventToolUpdate, ToolCallID: e.ToolCallID, ToolName: e.ToolName, Text: agentcore.ContentToText(e.PartialResult.Content)})
 			case agentcore.ToolExecutionEndEvent:
+				text, image, mime := toolResultContent(e.Result.Content)
 				s.append(Event{
 					RunID: runID, Type: EventToolEnd, ToolCallID: e.ToolCallID, ToolName: e.ToolName,
-					Text: agentcore.ContentToText(e.Result.Content), Details: marshalAny(e.Result.Details),
+					Text: text, Image: image, ImageMime: mime, Details: marshalAny(e.Result.Details),
 					IsError: e.IsError || e.Result.IsError,
 				})
 			}
@@ -471,6 +486,19 @@ func thinkingText(content agentcore.ContentList) string {
 		}
 	}
 	return b.String()
+}
+
+// toolResultContent keeps the text and the first image of a tool result. The
+// mobile transport carries one image per event; Android Use screenshots are
+// stripped separately by the bridge.
+func toolResultContent(content agentcore.ContentList) (text, image, mime string) {
+	text = agentcore.ContentToText(content)
+	for _, block := range content {
+		if img, ok := block.(agentcore.ImageContent); ok {
+			return text, img.Data, img.MimeType
+		}
+	}
+	return text, "", ""
 }
 
 func marshalAny(v any) json.RawMessage {
