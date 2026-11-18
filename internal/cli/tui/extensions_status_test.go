@@ -50,6 +50,21 @@ func TestExtensionHidesEmptyLastAttempt(t *testing.T) {
 	}
 }
 
+func TestExtensionSetupLabels(t *testing.T) {
+	for _, tc := range []struct {
+		ref  extensions.SourceRef
+		want string
+	}{
+		{extensions.SourceRef{Kind: "mcp", ID: "lark"}, "Authorize: lark…"},
+		{extensions.SourceRef{Kind: "mcp", ID: "other"}, "Configure / authorize…"},
+		{extensions.SourceRef{Kind: "plugin", ID: "lark"}, "Configure / authorize…"},
+	} {
+		if got := extensionSetupLabel(tc.ref); got != tc.want {
+			t.Errorf("extensionSetupLabel(%v) = %q, want %q", tc.ref, got, tc.want)
+		}
+	}
+}
+
 func TestLarkProbeLabelKeepsUnknownDistinct(t *testing.T) {
 	for _, tc := range []struct {
 		state string

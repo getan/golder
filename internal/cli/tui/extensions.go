@@ -154,6 +154,13 @@ func extensionStatusText(s extensions.Snapshot) string {
 	return s.State
 }
 
+func extensionSetupLabel(ref extensions.SourceRef) string {
+	if ref.Kind == "mcp" && ref.ID == "lark" {
+		return "Authorize: lark…"
+	}
+	return "Configure / authorize…"
+}
+
 func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 	ext := m.opts.Extensions
 	if ext == nil {
@@ -313,7 +320,7 @@ func (m Model) extensionDetailPage(ref extensions.SourceRef, page string, drill 
 					rows = append(rows, pickItem{Title: "Authorize in private browser…", Value: extensionValue("mcp-oauth", ref.ID), Info: info})
 				}
 				if len(cfg.Setup) > 0 {
-					add("Configure / authorize…", "setup")
+					add(extensionSetupLabel(ref), "setup")
 				}
 				variants := make([]string, 0, len(cfg.SetupVariants))
 				for name := range cfg.SetupVariants {
