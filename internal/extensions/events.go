@@ -69,8 +69,8 @@ func (m *Manager) deliverEvents() {
 						if s.cancel != nil {
 							s.cancel()
 						}
-						s.lastError = "event delivery timed out; plugin stopped"
 						s.state = "failed"
+						s.recordFailure("event", "event delivery timed out; plugin stopped", time.Now())
 						m.publish(s)
 					case <-m.ctx.Done():
 					}

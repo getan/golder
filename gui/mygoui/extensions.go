@@ -733,10 +733,14 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 	helperReady := larkHelperReady(a.extension)
 	next := a.larkNextAction(helperReady)
 	statusColor := theme.TextMuted
-	if a.extension.Enabled && (a.extension.State == "ready" || a.extension.State == "on demand") {
-		statusColor = theme.Success
-	} else if a.extension.LastError != "" {
+	if a.extension.State == "failed" {
 		statusColor = theme.Danger
+	} else if a.extension.Enabled && (a.extension.State == "ready" || a.extension.State == "on demand") {
+		statusColor = theme.Success
+	}
+	stateText := a.extension.State
+	if a.extension.Busy {
+		stateText += " · in use now"
 	}
 	ui.Column(c).Padding(14).Gap(12).Radius(12).Background(theme.Surface).Border(1, theme.Border).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
@@ -744,10 +748,17 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 				ui.Text(c, "Lark + Project").FontSize(15).FontWeight(600)
 				ui.Text(c, a.extension.Description).FontSize(11).TextColor(theme.TextMuted)
 			})
-			ui.Text(c, a.extension.State).FontSize(11).TextColor(statusColor)
+			ui.Text(c, stateText).FontSize(11).TextColor(statusColor)
 		})
 		if a.extension.State == "on demand" {
-			ui.Text(c, "Ready on demand. Other idle conversations do not hold the shared login state lock.").FontSize(11).TextColor(theme.TextMuted).Wrap()
+			text := "Ready on demand. Other idle conversations do not hold the shared login state lock."
+			if a.extension.Busy {
+				text = "In use now: an operation in this or another session holds the shared login state lock; a new call waits for it."
+			}
+			ui.Text(c, text).FontSize(11).TextColor(theme.TextMuted).Wrap()
+		}
+		if a.extension.LastAttempt != "" && a.extension.State != "failed" {
+			ui.Text(c, "Last attempt failed: "+a.extension.LastAttempt+". This is history, not the current state; a successful call clears it.").FontSize(11).TextColor(theme.TextMuted).Wrap()
 		}
 		if hint := map[string]string{
 			"install": "Install the bundled helper.", "update": "Update the helper.",
@@ -997,6 +1008,15 @@ func (a *App) extensionStatus(c *ui.Context) {
 		ui.Text(c, a.extensionNote).FontSize(12).TextColor(theme.TextMuted).Wrap()
 	}
 	if a.extension.LastError != "" && a.extension.LastError != a.extensionErr {
-		ui.Text(c, a.extension.LastError).FontSize(11).TextColor(theme.Danger).Wrap()
+		text, color := a.extension.LastAttempt, theme.TextMuted
+		if text == "" {
+			text = a.extension.LastError
+		}
+		if a.extension.State == "failed" {
+			color = theme.Danger
+		} else {
+			text = "Last attempt failed: " + text
+		}
+		ui.Text(c, text).FontSize(11).TextColor(color).Wrap()
 	}
 }

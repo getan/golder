@@ -66,13 +66,22 @@ func extensionSourceRow(s extensions.Snapshot) pickItem {
 		}
 	}
 	tone := pickMuted
-	if s.State == "ready" || s.State == "on demand" && s.Trust == "approved" {
+	if s.State == "failed" || s.Authentication == "required" {
+		tone = pickWarn
+	} else if s.State == "ready" || s.State == "on demand" && s.Trust == "approved" {
 		tone = pickOK
 	}
-	if s.LastError != "" || s.Authentication == "required" {
-		tone = pickWarn
+	return pickItem{Title: s.Ref.ID + " [" + s.Type + "]", Status: extensionStatusText(s), StatusTone: tone, Detail: fmt.Sprintf("%d/%d tools", available, len(s.Tools)), Value: extensionValue("detail", s.Ref.Kind, s.Ref.ID), Info: []pickInfoLine{{Label: "Source", Value: s.Ref.String()}, {Label: "Trust", Value: s.Trust}, {Label: "Auth", Value: s.Authentication}, {Label: "Endpoint", Value: s.Endpoint}, {Label: "Last attempt", Value: extensions.LastAttemptText(s)}}}
+}
+
+// extensionStatusText is the current readiness. "in use now" is a live lock
+// observation, not a lifecycle state, so it rides beside the state instead of
+// replacing it.
+func extensionStatusText(s extensions.Snapshot) string {
+	if s.Busy {
+		return s.State + " · in use now"
 	}
-	return pickItem{Title: s.Ref.ID + " [" + s.Type + "]", Status: s.State, StatusTone: tone, Detail: fmt.Sprintf("%d/%d tools", available, len(s.Tools)), Value: extensionValue("detail", s.Ref.Kind, s.Ref.ID), Info: []pickInfoLine{{Label: "Source", Value: s.Ref.String()}, {Label: "Trust", Value: s.Trust}, {Label: "Auth", Value: s.Authentication}, {Label: "Endpoint", Value: s.Endpoint}, {Label: "Error", Value: s.LastError}}}
+	return s.State
 }
 
 func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
@@ -81,6 +90,9 @@ func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 		m.transcript.addSystem("Extensions unavailable in this session.")
 		return m, nil
 	}
+	// A snapshot cannot know whether another session holds the shared login
+	// state lock; the probe is cheap and starts no child process.
+	ext.RefreshLiveState()
 	var rows []pickItem
 	if kind != "skills" {
 		sources := ext.List()
@@ -140,11 +152,12 @@ func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) extensionDetail(ref extensions.SourceRef) (tea.Model, tea.Cmd) {
+	m.opts.Extensions.RefreshLiveState()
 	for _, s := range m.opts.Extensions.List() {
 		if s.Ref != ref {
 			continue
 		}
-		info := []pickInfoLine{{Label: "Source", Value: s.Ref.String()}, {Label: "Type", Value: s.Type}, {Label: "Protocol", Value: s.Protocol}, {Label: "Version", Value: s.Version}, {Label: "Status", Value: s.State}, {Label: "Trust", Value: s.Trust}, {Label: "Authentication", Value: s.Authentication}, {Label: "Endpoint", Value: s.Endpoint}, {Label: "Error", Value: s.LastError}}
+		info := []pickInfoLine{{Label: "Source", Value: s.Ref.String()}, {Label: "Type", Value: s.Type}, {Label: "Protocol", Value: s.Protocol}, {Label: "Version", Value: s.Version}, {Label: "Status", Value: extensionStatusText(s)}, {Label: "Trust", Value: s.Trust}, {Label: "Authentication", Value: s.Authentication}, {Label: "Endpoint", Value: s.Endpoint}, {Label: "Last attempt", Value: extensions.LastAttemptText(s)}}
 		var rows []pickItem
 		add := func(title, op string) {
 			rows = append(rows, pickItem{Title: title, Value: extensionValue("action", ref.Kind, op, ref.ID), Info: info})

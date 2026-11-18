@@ -20,3 +20,5 @@ func lockStateContext(context.Context, string) (func(), error) {
 func stateLockMode(context.Context, string, bool) (func(), error) {
 	return nil, errors.New("persistent extensions require macOS or Linux")
 }
+
+func stateBusy(string) bool { return false }

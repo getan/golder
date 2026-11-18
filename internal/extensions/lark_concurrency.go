@@ -181,6 +181,16 @@ func larkCallPlan(c extension.Call) larkOperationPlan {
 	return p
 }
 
+// larkStateLockBusy reports whether the shared login-state lock for home is
+// held right now. acquireLarkLease takes this lock first for every operation,
+// so a held lock means an operation is running in this or another process.
+func larkStateLockBusy(home string) bool {
+	if home == "" {
+		return false
+	}
+	return stateBusy(filepath.Join(filepath.Dir(home), ".lock"))
+}
+
 // All locks live beside HOME and survive reset. Slots are separate flock
 // descriptors, so the bound applies across Managers, GUI/TUI and OS processes.
 func acquireLarkLease(ctx context.Context, home string, p larkOperationPlan, report func(extension.Progress)) (func(), error) {

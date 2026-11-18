@@ -26,6 +26,7 @@ type Response struct {
 }
 
 func RenderList(m *extensions.Manager, kind string) string {
+	m.RefreshLiveState()
 	var b strings.Builder
 	if kind != "skills" {
 		b.WriteString("Tool sources\n")
@@ -39,7 +40,14 @@ func RenderList(m *extensions.Manager, kind string) string {
 					n++
 				}
 			}
-			fmt.Fprintf(&b, "  %s  [%s]  %s · %s · %d/%d tools\n", s.Ref, s.Type, s.State, s.Trust, n, len(s.Tools))
+			status := s.State
+			if s.Busy {
+				status += " · in use now"
+			}
+			fmt.Fprintf(&b, "  %s  [%s]  %s · %s · %d/%d tools\n", s.Ref, s.Type, status, s.Trust, n, len(s.Tools))
+			if s.LastError != "" && s.State != "failed" {
+				fmt.Fprintf(&b, "    last attempt: %s\n", extensions.LastAttemptText(s))
+			}
 		}
 		if kind == "extensions" {
 			var shown bool
@@ -68,6 +76,7 @@ func RenderList(m *extensions.Manager, kind string) string {
 	return b.String()
 }
 func Detail(m *extensions.Manager, ref extensions.SourceRef) (string, error) {
+	m.RefreshLiveState()
 	for _, s := range m.List() {
 		if s.Ref == ref {
 			b, _ := json.MarshalIndent(s, "", "  ")

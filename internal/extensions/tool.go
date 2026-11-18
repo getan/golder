@@ -184,12 +184,13 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 		}
 		message := s.logs.Clean(e.Error(), 2048)
 		if s.conn == conn && s.enabled.Load() {
-			s.lastError, s.state = message, "failed"
+			s.noteCallFailure(message, callScoped, time.Now())
 		}
 		return fail("extension call failed; execution outcome may be unknown: " + message)
 	}
 	if callScoped && s.conn == conn && s.enabled.Load() {
-		s.state, s.lastError = "on demand", ""
+		s.state = "on demand"
+		s.clearFailure()
 	}
 	return agentResultForSource(r, &s.logs), nil // terminal result, never retry in the generic executor
 }

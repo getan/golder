@@ -43,23 +43,31 @@ type ToolView struct {
 	Reason    string             `json:"reason,omitempty"`
 }
 type Snapshot struct {
-	Ref            SourceRef      `json:"source"`
-	Type           string         `json:"type"`
-	Enabled        bool           `json:"enabled"`
-	Trust          string         `json:"trust"`
-	State          string         `json:"state"`
-	Authentication string         `json:"authentication"`
-	Endpoint       string         `json:"endpoint,omitempty"`
-	Version        string         `json:"version,omitempty"`
-	Protocol       string         `json:"protocol,omitempty"`
-	LastError      string         `json:"last_error,omitempty"`
-	Tools          []ToolView     `json:"tools"`
-	Commands       []Item         `json:"commands,omitempty"`
-	Events         []string       `json:"events,omitempty"`
-	Prompts        []Item         `json:"prompts,omitempty"`
-	Resources      []Item         `json:"resources,omitempty"`
-	Revision       uint64         `json:"revision"`
-	Capabilities   map[string]any `json:"capabilities,omitempty"`
+	Ref            SourceRef `json:"source"`
+	Type           string    `json:"type"`
+	Enabled        bool      `json:"enabled"`
+	Trust          string    `json:"trust"`
+	State          string    `json:"state"`
+	Authentication string    `json:"authentication"`
+	Endpoint       string    `json:"endpoint,omitempty"`
+	Version        string    `json:"version,omitempty"`
+	Protocol       string    `json:"protocol,omitempty"`
+	LastError      string    `json:"last_error,omitempty"`
+	// LastErrorScope and LastErrorAt describe the last failed attempt
+	// (connect, call, catalog or event) and when it happened. They are history:
+	// State is the current readiness, and a successful attempt clears all three.
+	LastErrorScope string     `json:"last_error_scope,omitempty"`
+	LastErrorAt    *time.Time `json:"last_error_at,omitempty"`
+	// Busy is a live, point-in-time fact for call-scoped sources: the shared
+	// login-state lock is held right now (by this process or another session).
+	Busy         bool           `json:"busy,omitempty"`
+	Tools        []ToolView     `json:"tools"`
+	Commands     []Item         `json:"commands,omitempty"`
+	Events       []string       `json:"events,omitempty"`
+	Prompts      []Item         `json:"prompts,omitempty"`
+	Resources    []Item         `json:"resources,omitempty"`
+	Revision     uint64         `json:"revision"`
+	Capabilities map[string]any `json:"capabilities,omitempty"`
 }
 type persisted struct {
 	Approval    string  `json:"approval"`
@@ -82,6 +90,9 @@ type source struct {
 	storedApproval                  string
 	catalog                         Catalog
 	state, auth, lastError, version string
+	lastErrorScope                  string
+	lastErrorAt                     time.Time
+	busy                            bool
 	conn                            backend
 	logs                            logBuffer
 	enabled                         atomic.Bool
@@ -163,7 +174,7 @@ func New(opts Options) (*Manager, error) {
 		}
 		if err != nil {
 			s.state = "failed"
-			s.lastError = clean(err.Error(), 2048)
+			s.recordFailure("config", clean(err.Error(), 2048), time.Now())
 		}
 		if p, ok := saved[ref.String()]; ok {
 			s.approval = p.Approval
@@ -444,7 +455,7 @@ func (m *Manager) connectLockedWithOAuth(ctx context.Context, s *source, oauth a
 	if e != nil {
 		cancel()
 		s.state = "failed"
-		s.lastError = s.logs.Clean(e.Error(), 2048)
+		s.recordFailure("connect", s.logs.Clean(e.Error(), 2048), time.Now())
 		failure := strings.ToLower(e.Error())
 		if strings.Contains(failure, "authentication") || strings.Contains(failure, "unauthorized") || strings.Contains(failure, "401") {
 			s.auth = "required"
@@ -456,13 +467,14 @@ func (m *Manager) connectLockedWithOAuth(ctx context.Context, s *source, oauth a
 		cancel()
 		_ = b.Close()
 		s.state = "failed"
-		s.lastError = s.logs.Clean(e.Error(), 2048)
+		s.recordFailure("connect", s.logs.Clean(e.Error(), 2048), time.Now())
 		return errors.New(s.lastError)
 	}
 	if !s.logs.safeCatalog(cat) {
 		cancel()
 		_ = b.Close()
-		s.state, s.lastError = "failed", "extension catalog contains a credential and was withheld"
+		s.state = "failed"
+		s.recordFailure("catalog", "extension catalog contains a credential and was withheld", time.Now())
 		return errors.New(s.lastError)
 	}
 	if !s.enabled.Load() || m.closed.Load() {
@@ -476,7 +488,7 @@ func (m *Manager) connectLockedWithOAuth(ctx context.Context, s *source, oauth a
 	if s.cfg.Runtime == "cli" || callScopedLarkState(s.cfg) {
 		s.state = "on demand"
 	}
-	s.lastError = ""
+	s.clearFailure()
 	if oauth != nil {
 		if tokenSource, err := oauth.TokenSource(ctx); err == nil && tokenSource != nil {
 			s.auth = "verified"
@@ -661,8 +673,65 @@ func (m *Manager) publish(s *source) {
 		variants[name] = clean(strings.Join(argv, " "), 2048)
 	}
 	capabilities["setup_variants"] = variants
-	s.snapshot.Store(&Snapshot{Ref: s.ref, Type: typ, Enabled: s.enabled.Load(), Trust: trust, State: s.state, Authentication: s.auth, Endpoint: clean(endpoint, 512), Version: clean(version, 128), Protocol: clean(s.catalog.Protocol, 128), LastError: s.lastError, Tools: m.views(s), Commands: s.catalog.Commands, Events: s.catalog.Events, Prompts: s.catalog.Prompts, Resources: s.catalog.Resources, Revision: m.revision.Load(), Capabilities: capabilities})
+	var lastErrorAt *time.Time
+	if !s.lastErrorAt.IsZero() {
+		at := s.lastErrorAt
+		lastErrorAt = &at
+	}
+	s.snapshot.Store(&Snapshot{
+		Ref: s.ref, Type: typ, Enabled: s.enabled.Load(), Trust: trust,
+		State: s.state, Authentication: s.auth,
+		Endpoint: clean(endpoint, 512), Version: clean(version, 128), Protocol: clean(s.catalog.Protocol, 128),
+		LastError: s.lastError, LastErrorScope: s.lastErrorScope, LastErrorAt: lastErrorAt, Busy: s.busy,
+		Tools: m.views(s), Commands: s.catalog.Commands, Events: s.catalog.Events,
+		Prompts: s.catalog.Prompts, Resources: s.catalog.Resources,
+		Revision: m.revision.Load(), Capabilities: capabilities,
+	})
 }
+
+// recordFailure stores the history of one failed attempt. It deliberately does
+// not decide State: the caller knows whether the failure actually changed what
+// the source can do now (a connect failure does; a single call failure on a
+// call-scoped source does not).
+func (s *source) recordFailure(scope, message string, at time.Time) {
+	s.lastError, s.lastErrorScope, s.lastErrorAt = message, scope, at
+}
+
+// clearFailure forgets the last attempt after one succeeded.
+func (s *source) clearFailure() {
+	s.lastError, s.lastErrorScope, s.lastErrorAt = "", "", time.Time{}
+}
+
+// noteCallFailure records a failed tool call. Readiness changes only for a
+// persistent source, whose connection is gone; a call-scoped source (Lark)
+// starts a fresh helper per operation, so it stays ready for the next call.
+func (s *source) noteCallFailure(message string, callScoped bool, at time.Time) {
+	s.recordFailure("call", message, at)
+	if !callScoped {
+		s.state = "failed"
+	}
+}
+
+// LastAttemptText renders the history of the last failed attempt for a status
+// view: when it happened, what kind of attempt it was, and the error. State is
+// the current readiness, so this text never stands in for it.
+func LastAttemptText(s Snapshot) string {
+	if s.LastError == "" {
+		return ""
+	}
+	var b strings.Builder
+	if s.LastErrorAt != nil {
+		b.WriteString(s.LastErrorAt.Local().Format("2006-01-02 15:04"))
+		b.WriteString(" · ")
+	}
+	if s.LastErrorScope != "" {
+		b.WriteString(s.LastErrorScope)
+		b.WriteString(": ")
+	}
+	b.WriteString(s.LastError)
+	return b.String()
+}
+
 func (m *Manager) List() []Snapshot {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -686,6 +755,39 @@ func (m *Manager) List() []Snapshot {
 	}
 	slices.SortFunc(out, func(a, b Snapshot) int { return strings.Compare(a.Ref.String(), b.Ref.String()) })
 	return out
+}
+
+// RefreshLiveState re-reads the cheap facts a published snapshot cannot know:
+// for a call-scoped source, whether its shared login-state lock is held right
+// now by this or another session. It starts no child process and makes no
+// network call, so a list view may call it on open. Personal authorization is
+// still the explicit, operator-initiated ProbeLarkAuthorization.
+func (m *Manager) RefreshLiveState() {
+	if m == nil || m.closed.Load() {
+		return
+	}
+	m.mu.RLock()
+	sources := make([]*source, 0, len(m.sources))
+	for _, s := range m.sources {
+		sources = append(sources, s)
+	}
+	m.mu.RUnlock()
+	for _, s := range sources {
+		if !callScopedLarkState(s.cfg) {
+			continue
+		}
+		busy := larkStateLockBusy(s.cfg.stateHome)
+		if !s.mu.TryLock() {
+			// An operation owns the source right now; its own transitions will
+			// publish what it is doing.
+			continue
+		}
+		if s.busy != busy {
+			s.busy = busy
+			m.publish(s)
+		}
+		s.mu.Unlock()
+	}
 }
 
 func (m *Manager) Tools() []agentcore.AgentTool {

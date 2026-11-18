@@ -54,6 +54,8 @@ type ExtensionSourceView struct {
 	Authentication string
 	Version        string
 	LastError      string
+	LastAttempt    string
+	Busy           bool
 	Endpoint       string
 	Network        bool
 	StateDir       bool
@@ -74,6 +76,10 @@ type LarkExtensionSettings struct {
 	CredentialAvailable bool
 	Domains             []string
 	ProjectHost         string
+	// LastAttempt is the history of the last failed attempt (time, scope and
+	// error); Busy is the live shared-lock observation. Neither replaces State.
+	LastAttempt string
+	Busy        bool
 }
 
 // LarkExtensionEdit carries one configuration save. NewAppSecret is write-only
@@ -112,6 +118,8 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 	if manager == nil {
 		return LarkExtensionSettings{}, errors.New("extension manager unavailable")
 	}
+	// Readiness is current; the probe cannot start a helper or reach the network.
+	manager.RefreshLiveState()
 	view := LarkExtensionSettings{
 		ExtensionPackageView: ExtensionPackageView{
 			ID: "lark", Name: "Lark + Project",
@@ -128,6 +136,7 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 		view.Enabled = snapshot.Enabled
 		view.Trusted = snapshot.Trust == "approved"
 		view.State, view.Authentication, view.LastError = snapshot.State, snapshot.Authentication, snapshot.LastError
+		view.LastAttempt, view.Busy = extensions.LastAttemptText(snapshot), snapshot.Busy
 		cfg, err := manager.Config(larkSourceRef)
 		if err != nil {
 			return view, err
@@ -223,6 +232,7 @@ func (c *Controller) ExtensionSources() []ExtensionSourceView {
 	if manager == nil {
 		return nil
 	}
+	manager.RefreshLiveState()
 	snapshots := manager.List()
 	out := make([]ExtensionSourceView, 0, len(snapshots))
 	for _, snapshot := range snapshots {
@@ -231,6 +241,7 @@ func (c *Controller) ExtensionSources() []ExtensionSourceView {
 			Enabled: snapshot.Enabled, Trusted: snapshot.Trust == "approved",
 			State: snapshot.State, Authentication: snapshot.Authentication,
 			Version: snapshot.Version, LastError: snapshot.LastError, Endpoint: snapshot.Endpoint,
+			LastAttempt: extensions.LastAttemptText(snapshot), Busy: snapshot.Busy,
 			Network:     capabilityBool(snapshot.Capabilities, "network"),
 			StateDir:    capabilityBool(snapshot.Capabilities, "state_dir"),
 			Executables: capabilityCount(snapshot.Capabilities, "executables"), Tools: len(snapshot.Tools),
