@@ -39,7 +39,7 @@ func TestWebAndImageToolsAreInTheAndroidCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"view_image", "webfetch", "websearch", "get_context_remaining", "new_context"} {
+	for _, name := range []string{"view_image", "webfetch", "websearch", "get_context_remaining", "new_context", "run"} {
 		if !hasTool(s, name) {
 			t.Errorf("Android catalog is missing %q", name)
 		}

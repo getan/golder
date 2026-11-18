@@ -136,6 +136,7 @@ func newToolset(cfg Config, lookPath func(string) (string, error)) (*Toolset, er
 		&agenttool.ViewImageTool{Root: root},
 		&agenttool.WebFetchTool{},
 		agenttool.NewWebSearchTool(cfg.SearchEnv),
+		&runTool{root: root, binDir: "/system/bin", perms: mode},
 	}
 	if caps.Ripgrep != "" {
 		s.Tools = append(s.Tools, &agenttool.GrepTool{Root: root}, &agenttool.FindTool{Root: root})
@@ -202,6 +203,7 @@ func (s *Toolset) Prompt() string {
 	b.WriteString("Use read, ls and apply_patch for workspace files. Preserve task intent, report tool failures and do not replay a write whose outcome is unknown. ")
 	b.WriteString("Use view_image for an image file in the workspace. webfetch returns a URL as Markdown; websearch searches the web, preferring the configured search backend and otherwise using the keyless fallback. ")
 	b.WriteString("get_context_remaining reports the remaining context budget; new_context asks for a fresh window at the next turn boundary, summarizing the conversation and keeping recent messages. ")
+	b.WriteString("A restricted run tool executes one allowlisted command with argv: no shell syntax, pipes or redirection; paths must stay in the workspace and write commands are blocked in read-only mode. ")
 	b.WriteString("For multi-step work, use the todo tool to keep a short task list and update it as work progresses. ")
 	b.WriteString("Shell commands are subject to the host authorization gate. Android app isolation is not a workspace-level shell sandbox: a shell may reach other data the app can access, and per-command network isolation is not provided here. ")
 	b.WriteString("A structured git tool is available for local status/log/diff/add/commit/branch/checkout/remote and for clone/fetch/push when the host grants network access for that exact call. ")
