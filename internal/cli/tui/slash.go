@@ -147,6 +147,20 @@ type slashMenu struct {
 	// pickDefault is set while the level stage is choosing a DEFAULT level (the
 	// model picker's `d` key) rather than switching this session.
 	pickDefault bool
+	// pickStack is the drill-down history. Esc pops one frame instead of
+	// closing the whole menu, so a detail page is never a one-way trip.
+	pickStack []pickFrame
+}
+
+// pickFrame is one remembered picker level.
+type pickFrame struct {
+	pick        []pickItem
+	pickMark    string
+	pickKind    string
+	pickModel   string
+	pickHint    string
+	pickDefault bool
+	selected    int
 }
 
 // pickItem is one picker row: Title renders first, Detail (dimmer context)
@@ -573,6 +587,7 @@ func (mn *slashMenu) close() {
 	mn.pickModel = ""
 	mn.pickHint = ""
 	mn.pickDefault = false
+	mn.pickStack = nil
 }
 
 // openPicker shows the menu as an item picker (arrow keys + Enter, Esc
@@ -600,6 +615,51 @@ func (mn *slashMenu) openPickerDetailed(items []pickItem, mark, kind string) {
 	mn.selected = mn.firstSelectable(0, 1)
 }
 
+// openPickerDrill opens a deeper picker and remembers the current one, so Esc
+// returns to it instead of closing the menu.
+func (mn *slashMenu) openPickerDrill(items []pickItem, mark, kind string) {
+	if mn.picking() {
+		mn.pickStack = append(mn.pickStack, pickFrame{
+			pick: mn.pick, pickMark: mn.pickMark, pickKind: mn.pickKind,
+			pickModel: mn.pickModel, pickHint: mn.pickHint,
+			pickDefault: mn.pickDefault, selected: mn.selected,
+		})
+	}
+	mn.openPickerDetailed(items, mark, kind)
+}
+
+// popPicker restores the enclosing picker. It reports false at the top level,
+// which leaves Esc its existing close behavior.
+func (mn *slashMenu) popPicker() bool {
+	if len(mn.pickStack) == 0 {
+		return false
+	}
+	last := mn.pickStack[len(mn.pickStack)-1]
+	mn.pickStack = mn.pickStack[:len(mn.pickStack)-1]
+	mn.pick, mn.pickMark, mn.pickKind = last.pick, last.pickMark, last.pickKind
+	mn.pickModel, mn.pickHint, mn.pickDefault = last.pickModel, last.pickHint, last.pickDefault
+	mn.selected = last.selected
+	mn.active = len(mn.pick) > 0
+	mn.filtered = nil
+	return true
+}
+
+// hintText keeps the visible legend honest about Esc at this depth: it goes
+// back to the previous picker, and only closes once at the top.
+func (mn slashMenu) hintText() string {
+	hint := mn.pickHint
+	if len(mn.pickStack) == 0 {
+		return hint
+	}
+	for _, suffix := range []string{" · Esc Close", " · Esc close", " · Esc cancel"} {
+		hint = strings.TrimSuffix(hint, suffix)
+	}
+	if hint == "" {
+		hint = "↑↓ Select · Enter"
+	}
+	return hint + " · Esc back"
+}
+
 // firstSelectable returns the index of the first selectable row at or after
 // from, scanning in the direction of step (1 forward, -1 backward). A picker
 // whose first row is a heading must open with a real row highlighted, or Enter
@@ -617,8 +677,8 @@ func (mn slashMenu) firstSelectable(from, step int) int {
 // levels model advertises, with the current level marked and the level saved
 // for this provider/model pair tagged as the default. model stays pending
 // until the level is confirmed, so the confirm can run both steps as a single
-// /model <id> <level>. Esc closes the menu (close clears the pending model)
-// and cancels the switch entirely.
+// /model <id> <level>. Esc goes back to the model picker (and a second Esc
+// cancels the switch); the live model is untouched until stage 2 confirms.
 func (mn *slashMenu) openLevelPicker(model string, levels []agentcore.ThinkingLevel, mark, defaultLevel agentcore.ThinkingLevel) {
 	items := make([]pickItem, 0, len(levels))
 	for _, lvl := range levels {
@@ -628,9 +688,9 @@ func (mn *slashMenu) openLevelPicker(model string, levels []agentcore.ThinkingLe
 			Default: lvl == defaultLevel,
 		})
 	}
-	mn.openPickerDetailed(items, string(mark), "model-level")
+	mn.openPickerDrill(items, string(mark), "model-level")
 	mn.pickModel = model
-	mn.pickHint = "↑↓ select · Enter apply · d set default for this model · Esc cancel"
+	mn.pickHint = "↑↓ select · Enter apply · d set default for this model"
 }
 
 // openDefaultLevelPicker is openLevelPicker for the model picker's `d` key:
@@ -638,7 +698,7 @@ func (mn *slashMenu) openLevelPicker(model string, levels []agentcore.ThinkingLe
 func (mn *slashMenu) openDefaultLevelPicker(model string, levels []agentcore.ThinkingLevel, mark, defaultLevel agentcore.ThinkingLevel) {
 	mn.openLevelPicker(model, levels, mark, defaultLevel)
 	mn.pickDefault = true
-	mn.pickHint = "↑↓ select · Enter save as default · Esc cancel"
+	mn.pickHint = "↑↓ select · Enter save as default"
 }
 
 // picking reports whether the menu is in picker mode.
@@ -733,8 +793,8 @@ func (mn slashMenu) view(width int) string {
 				lines = append(lines, mn.pickInfoLines(rowWidth)...)
 			}
 		}
-		if mn.pickHint != "" {
-			lines = append(lines, ansi.Truncate(mn.theme.System.Render(mn.pickHint), rowWidth, "…"))
+		if hint := mn.hintText(); hint != "" {
+			lines = append(lines, ansi.Truncate(mn.theme.System.Render(hint), rowWidth, "…"))
 		}
 		return strings.Join(lines, "\n")
 	}

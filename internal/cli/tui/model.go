@@ -136,6 +136,9 @@ type Model struct {
 	extensionPreview    string
 	extensionSetupText  string // transient operator UI; never persisted or sent to the model
 	extensionSetupEpoch uint64
+	larkProbeEpoch      uint64
+	larkProbeCancel     context.CancelFunc
+	larkProbeStatus     string
 	mcpWizard           *mcpAddWizard // transient operator input; may contain credentials
 	mcpOAuth            *mcpOAuthState
 	mcpOAuthEpoch       uint64
@@ -1122,6 +1125,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.computerEnded(msg)
 	case extensionDoneMsg:
 		return m.extensionDone(msg)
+	case larkProbeDoneMsg:
+		return m.finishLarkProbe(msg)
 	case extensionSetupProgressMsg:
 		if msg.epoch != m.extensionSetupEpoch {
 			return m, nil
@@ -2164,6 +2169,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if (m.menu.pickKind == "computer-application" || m.menu.pickKind == "computer-target" || m.menu.pickKind == "computer-grant") && m.session != nil {
 				m.session.cancelComputerSetup()
 			}
+			if m.menu.popPicker() {
+				m.relayout()
+				return m, nil
+			}
 			m.menu.close()
 			m.relayout()
 			return m, nil
@@ -2610,7 +2619,7 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 			if levels := provider.ReasoningLevels(m.live.ProviderName, item); len(levels) > 0 {
 				m.menu.openLevelPicker(item, levels, m.live.ThinkingLevel,
 					prompts.DefaultThinkingLevelForProviderModel(m.live.ProviderName, item))
-				m.transcript.addSystem(fmt.Sprintf("Select a reasoning level for %s (↑↓ + Enter, d sets the default, Esc cancels):", item))
+				m.transcript.addSystem(fmt.Sprintf("Select a reasoning level for %s (↑↓ + Enter, d sets the default, Esc goes back):", item))
 				m.relayout()
 				return m, nil
 			}

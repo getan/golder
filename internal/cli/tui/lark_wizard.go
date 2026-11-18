@@ -149,7 +149,7 @@ func (m Model) handleLarkWizardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				w.err = "Enter a valid App Secret."
 				return m, nil
 			}
-			w.phase, w.err = "domains", ""
+			w.phase, w.err = "review", ""
 			return m, nil
 		}
 	case "domains":
@@ -164,21 +164,7 @@ func (m Model) handleLarkWizardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if len(w.selectedDomains()) == 0 {
 				w.err = "Select at least one Lark service."
 			} else {
-				w.phase, w.err = "project", ""
-			}
-		}
-		return m, nil
-	case "project":
-		switch msg.String() {
-		case "space", "p":
-			w.project = !w.project
-		case "enter":
-			if w.project && w.projectCLI == "" {
-				w.phase = "project-cli"
-			} else if w.project {
-				w.beginProjectHost()
-			} else {
-				w.phase = "review"
+				w.phase, w.err = "review", ""
 			}
 		}
 		return m, nil
@@ -194,6 +180,17 @@ func (m Model) handleLarkWizardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "review":
 		switch msg.String() {
+		case "d":
+			w.phase, w.err = "domains", ""
+		case "p":
+			w.project = !w.project
+			if w.project {
+				if w.projectCLI == "" {
+					w.phase = "project-cli"
+				} else {
+					w.beginProjectHost()
+				}
+			}
 		case "h":
 			if w.project {
 				w.beginProjectHost()
@@ -368,13 +365,13 @@ func (w *larkSetupWizard) view() string {
 			}
 			fmt.Fprintf(&b, "  %s [%s] %s\n", mark, check, name)
 		}
-		b.WriteString("\n  ↑↓ select · Space toggle · Enter continue · Esc cancel")
-	case "project":
-		fmt.Fprintf(&b, "  [%-1s] Include Lark Project (separate CLI and authorization)\n\n  Space toggles · Enter continues · Esc cancels", map[bool]string{true: "x", false: " "}[w.project])
+		b.WriteString("\n  ↑↓ select · Space toggle · Enter back to review · Esc cancel")
 	case "project-host":
 		b.WriteString("  Project host (default project.feishu.cn)\n\n  " + w.input.View() + "\n\n  Enter continues · Esc cancels")
 	case "review":
-		fmt.Fprintf(&b, "  Helper: %s\n  Lark CLI: %s\n  App ID: %s\n  Services: %s\n  Network: enabled\n", extensions.DisplayText(w.pkg.Executable, 512), extensions.DisplayText(w.larkCLI, 512), extensions.DisplayText(w.appID, 256), strings.Join(w.selectedDomains(), ", "))
+		fmt.Fprintf(&b, "  Helper: %s\n  Lark CLI: %s\n  App ID: %s\n", extensions.DisplayText(w.pkg.Executable, 512), extensions.DisplayText(w.larkCLI, 512), extensions.DisplayText(w.appID, 256))
+		fmt.Fprintf(&b, "  Services: %s (d to change)\n", strings.Join(w.selectedDomains(), ", "))
+		fmt.Fprintf(&b, "  Project: %s (p to %s)\n", map[bool]string{true: "included", false: "not included"}[w.project], map[bool]string{true: "remove", false: "include"}[w.project])
 		if w.project {
 			fmt.Fprintf(&b, "  Project CLI: %s\n  Project host: %s (h to edit)\n", extensions.DisplayText(w.projectCLI, 512), extensions.DisplayText(w.projectHost, 253))
 		}

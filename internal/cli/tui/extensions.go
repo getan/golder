@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/getan/golder/internal/cli/extensioncmd"
@@ -18,6 +19,67 @@ type extensionDoneMsg struct {
 	err        error
 	preview    bool
 	setupEpoch uint64
+}
+
+// larkProbeDoneMsg carries the result of the read-only Lark status probe that
+// /extensions starts when it opens. The menu is usable while it runs.
+type larkProbeDoneMsg struct {
+	epoch  uint64
+	status extensions.LarkAuthorizationStatus
+	err    error
+}
+
+func larkProbeLabel(status extensions.LarkAuthorizationStatus, err error) string {
+	if err != nil {
+		return "unknown (check failed)"
+	}
+	switch status.Lark.State {
+	case "authorized":
+		return "authorized"
+	case "required":
+		return "authorization required"
+	case "unavailable":
+		return "CLI unavailable"
+	default:
+		return "unknown"
+	}
+}
+
+func withLarkProbeInfo(info []pickInfoLine, status string) []pickInfoLine {
+	if status != "" {
+		info = append(info, pickInfoLine{Label: "Lark check", Value: status})
+	}
+	return info
+}
+
+// finishLarkProbe updates the open menu in place. Closing the menu, opening it
+// again, or a newer probe leaves an old result for its epoch to be dropped.
+func (m Model) finishLarkProbe(msg larkProbeDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.epoch != m.larkProbeEpoch {
+		return m, nil
+	}
+	m.larkProbeCancel = nil
+	m.larkProbeStatus = larkProbeLabel(msg.status, msg.err)
+	if m.menu.pickKind == "extensions" && m.opts.Extensions != nil {
+		ref := extensions.SourceRef{Kind: "mcp", ID: "lark"}
+		if snap, ok := m.opts.Extensions.Source(ref); ok {
+			for i := range m.menu.pick {
+				row := &m.menu.pick[i]
+				if row.Value == extensionValue("detail", "mcp", "lark") {
+					*row = extensionSourceRow(snap)
+					row.Info = withLarkProbeInfo(row.Info, m.larkProbeStatus)
+					continue
+				}
+				for j := range row.Info {
+					if row.Info[j].Label == "Lark check" {
+						row.Info[j].Value = m.larkProbeStatus
+					}
+				}
+			}
+		}
+		m.relayout()
+	}
+	return m, nil
 }
 
 func extensionCommand(line string) bool {
@@ -71,7 +133,15 @@ func extensionSourceRow(s extensions.Snapshot) pickItem {
 	} else if s.State == "ready" || s.State == "on demand" && s.Trust == "approved" {
 		tone = pickOK
 	}
-	return pickItem{Title: s.Ref.ID + " [" + s.Type + "]", Status: extensionStatusText(s), StatusTone: tone, Detail: fmt.Sprintf("%d/%d tools", available, len(s.Tools)), Value: extensionValue("detail", s.Ref.Kind, s.Ref.ID), Info: []pickInfoLine{{Label: "Source", Value: s.Ref.String()}, {Label: "Trust", Value: s.Trust}, {Label: "Auth", Value: s.Authentication}, {Label: "Endpoint", Value: s.Endpoint}, {Label: "Last attempt", Value: extensions.LastAttemptText(s)}}}
+	info := []pickInfoLine{{Label: "Source", Value: s.Ref.String()}, {Label: "Trust", Value: s.Trust}, {Label: "Auth", Value: s.Authentication}, {Label: "Endpoint", Value: s.Endpoint}}
+	return pickItem{Title: s.Ref.ID + " [" + s.Type + "]", Status: extensionStatusText(s), StatusTone: tone, Detail: fmt.Sprintf("%d/%d tools", available, len(s.Tools)), Value: extensionValue("detail", s.Ref.Kind, s.Ref.ID), Info: extensionFailureInfo(info, s)}
+}
+
+func extensionFailureInfo(info []pickInfoLine, s extensions.Snapshot) []pickInfoLine {
+	if failure := extensions.LastAttemptText(s); failure != "" {
+		info = append(info, pickInfoLine{Label: "Last attempt", Value: failure})
+	}
+	return info
 }
 
 // extensionStatusText is the current readiness. "in use now" is a live lock
@@ -93,6 +163,28 @@ func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 	// A snapshot cannot know whether another session holds the shared login
 	// state lock; the probe is cheap and starts no child process.
 	ext.RefreshLiveState()
+	// A read-only Lark status check starts in the background: the menu opens
+	// immediately and the result fills in when it lands.
+	if m.larkProbeCancel != nil {
+		m.larkProbeCancel()
+		m.larkProbeCancel = nil
+	}
+	m.larkProbeEpoch++
+	m.larkProbeStatus = ""
+	var probe tea.Cmd
+	if kind == "extensions" || kind == "mcp" {
+		if s, ok := ext.Source(extensions.SourceRef{Kind: "mcp", ID: "lark"}); ok && s.Enabled && s.Trust == "approved" {
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			m.larkProbeCancel = cancel
+			m.larkProbeStatus = "checking…"
+			epoch := m.larkProbeEpoch
+			probe = func() tea.Msg {
+				defer cancel()
+				status, err := ext.ProbeLarkAuthorization(ctx)
+				return larkProbeDoneMsg{epoch: epoch, status: status, err: err}
+			}
+		}
+	}
 	var rows []pickItem
 	if kind != "skills" {
 		sources := ext.List()
@@ -103,7 +195,11 @@ func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 			var sectionRows []pickItem
 			for _, source := range sources {
 				if extensionSection(source) == section {
-					sectionRows = append(sectionRows, extensionSourceRow(source))
+					row := extensionSourceRow(source)
+					if source.Ref.Kind == "mcp" && source.Ref.ID == "lark" {
+						row.Info = withLarkProbeInfo(row.Info, m.larkProbeStatus)
+					}
+					sectionRows = append(sectionRows, row)
 				}
 			}
 			if len(sectionRows) > 0 {
@@ -148,46 +244,79 @@ func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 	m.menu.pickHint = "↑↓ Select · Enter Details · Esc Close"
 	m.input.Clear()
 	m.relayout()
-	return m, nil
+	return m, probe
 }
 
 func (m Model) extensionDetail(ref extensions.SourceRef) (tea.Model, tea.Cmd) {
+	return m.extensionDetailPage(ref, "", true)
+}
+
+// extensionDetailPage renders the source menu. The primary page keeps the
+// common actions and pushes the rest one level down; drill decides whether Esc
+// returns to the picker that opened this page.
+func (m Model) extensionDetailPage(ref extensions.SourceRef, page string, drill bool) (tea.Model, tea.Cmd) {
 	m.opts.Extensions.RefreshLiveState()
 	for _, s := range m.opts.Extensions.List() {
 		if s.Ref != ref {
 			continue
 		}
-		info := []pickInfoLine{{Label: "Source", Value: s.Ref.String()}, {Label: "Type", Value: s.Type}, {Label: "Protocol", Value: s.Protocol}, {Label: "Version", Value: s.Version}, {Label: "Status", Value: extensionStatusText(s)}, {Label: "Trust", Value: s.Trust}, {Label: "Authentication", Value: s.Authentication}, {Label: "Endpoint", Value: s.Endpoint}, {Label: "Last attempt", Value: extensions.LastAttemptText(s)}}
+		info := []pickInfoLine{{Label: "Source", Value: s.Ref.String()}, {Label: "Type", Value: s.Type}, {Label: "Protocol", Value: s.Protocol}, {Label: "Version", Value: s.Version}, {Label: "Status", Value: extensionStatusText(s)}, {Label: "Trust", Value: s.Trust}, {Label: "Authentication", Value: s.Authentication}, {Label: "Endpoint", Value: s.Endpoint}}
+		info = extensionFailureInfo(info, s)
+		if ref.Kind == "mcp" && ref.ID == "lark" {
+			info = withLarkProbeInfo(info, m.larkProbeStatus)
+		}
+		cfg, cfgErr := m.opts.Extensions.Config(ref)
 		var rows []pickItem
 		add := func(title, op string) {
 			rows = append(rows, pickItem{Title: title, Value: extensionValue("action", ref.Kind, op, ref.ID), Info: info})
 		}
-		add("Browse tools", "tools")
-		if ref.Kind == "mcp" {
-			add("Browse prompts", "prompts")
-			add("Browse resources", "resources")
+		subpage := func(title, page string) {
+			rows = append(rows, pickItem{Title: title, Value: extensionValue("detail-page", ref.Kind, ref.ID, page), Info: info})
 		}
-		if strings.Contains(s.Type, "legacy") {
-			rows = append(rows, pickItem{Title: fmt.Sprintf("Commands: %d (not directly executed) · events: %s (metadata only)", len(s.Commands), strings.Join(s.Events, ", ")), Heading: true})
-		}
-		if !s.Enabled || s.Trust != "approved" {
-			rows = append(rows, pickItem{Title: "Review and enable…", Value: extensionValue("review", ref.Kind, ref.ID), Info: info})
-		} else if s.Type != "CLI" {
+		switch page {
+		case "connection":
 			add("Connect / probe", "connect")
 			add("Reconnect / restart", "reconnect")
 			add("Refresh catalog", "refresh")
 			add("Disconnect", "disconnect")
-		}
-		if c, err := m.opts.Extensions.Config(ref); err == nil {
-			if s.Enabled && s.Trust == "approved" {
-				if ref.Kind == "mcp" && c.Transport == "http" {
+		case "more":
+			if ref.Kind == "mcp" {
+				if len(s.Prompts) > 0 {
+					add("Browse prompts", "prompts")
+				}
+				if len(s.Resources) > 0 {
+					add("Browse resources", "resources")
+				}
+			}
+			add("View logs", "logs")
+			if cfgErr == nil && cfg.StateDir {
+				rows = append(rows, pickItem{Title: "Clear local login state…", Value: extensionValue("confirm-reset", ref.Kind, ref.ID), Info: info})
+			}
+			if ref.Kind == "mcp" {
+				if ref.ID != "lark" {
+					rows = append(rows, pickItem{Title: "Edit connection…", Value: extensionValue("mcp-edit", ref.ID), Info: info})
+				}
+				rows = append(rows, pickItem{Title: "Remove source…", Value: extensionValue("mcp-remove", ref.ID), Info: info})
+			}
+		case "disable":
+			add("Disable for this session", "disable")
+			rows = append(rows, pickItem{Title: "Disable and save", Value: extensionValue("action", ref.Kind, "disable", ref.ID, "--save"), Info: info})
+		default:
+			add("Browse tools", "tools")
+			if strings.Contains(s.Type, "legacy") {
+				rows = append(rows, pickItem{Title: fmt.Sprintf("Commands: %d (not directly executed) · events: %s (metadata only)", len(s.Commands), strings.Join(s.Events, ", ")), Heading: true})
+			}
+			if !s.Enabled || s.Trust != "approved" {
+				rows = append(rows, pickItem{Title: "Review and enable…", Value: extensionValue("review", ref.Kind, ref.ID), Info: info})
+			} else if cfgErr == nil {
+				if ref.Kind == "mcp" && cfg.Transport == "http" {
 					rows = append(rows, pickItem{Title: "Authorize in private browser…", Value: extensionValue("mcp-oauth", ref.ID), Info: info})
 				}
-				if len(c.Setup) > 0 {
+				if len(cfg.Setup) > 0 {
 					add("Configure / authorize…", "setup")
 				}
-				variants := make([]string, 0, len(c.SetupVariants))
-				for name := range c.SetupVariants {
+				variants := make([]string, 0, len(cfg.SetupVariants))
+				for name := range cfg.SetupVariants {
 					variants = append(variants, name)
 				}
 				sort.Strings(variants)
@@ -195,21 +324,23 @@ func (m Model) extensionDetail(ref extensions.SourceRef) (tea.Model, tea.Cmd) {
 					rows = append(rows, pickItem{Title: "Authorize: " + name + "…", Value: extensionValue("action", ref.Kind, "setup", ref.ID, name), Info: info})
 				}
 			}
-			if c.StateDir {
-				rows = append(rows, pickItem{Title: "Clear local login state…", Value: extensionValue("confirm-reset", ref.Kind, ref.ID), Info: info})
+			if ref.Kind == "mcp" && ref.ID == "lark" && s.Enabled && s.Trust == "approved" {
+				add("Test connection", "connect")
+			}
+			if s.Type != "CLI" {
+				subpage("Connection…", "connection")
+			}
+			subpage("More…", "more")
+			if s.Enabled {
+				subpage("Disable…", "disable")
 			}
 		}
-		add("View logs", "logs")
-		if ref.Kind == "mcp" {
-			if ref.ID != "lark" {
-				rows = append(rows, pickItem{Title: "Edit connection…", Value: extensionValue("mcp-edit", ref.ID), Info: info})
-			}
-			rows = append(rows, pickItem{Title: "Remove source…", Value: extensionValue("mcp-remove", ref.ID), Info: info})
+		rows = append(rows, pickItem{Title: "Back", Value: extensionValue("back"), Info: info})
+		if drill {
+			m.menu.openPickerDrill(rows, "", "extensions")
+		} else {
+			m.menu.openPickerDetailed(rows, "", "extensions")
 		}
-		add("Disable for this session", "disable")
-		rows = append(rows, pickItem{Title: "Disable and save", Value: extensionValue("action", ref.Kind, "disable", ref.ID, "--save"), Info: info})
-		rows = append(rows, pickItem{Title: "Back", Value: extensionValue("back")})
-		m.menu.openPickerDetailed(rows, "", "extensions")
 		m.menu.pickHint = "↑↓ Select · Enter · Esc Close"
 		m.relayout()
 		return m, nil
@@ -252,6 +383,10 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "back":
 		m.mcpRemoval = nil
+		if m.menu.popPicker() {
+			m.relayout()
+			return m, nil
+		}
 		kind := "extensions"
 		if len(v) == 2 && v[1] == "skills" {
 			kind = "skills"
@@ -259,7 +394,15 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		return m.openExtensions(kind)
 	case "detail":
 		if len(v) == 3 {
-			return m.extensionDetail(extensions.SourceRef{Kind: v[1], ID: v[2]})
+			return m.extensionDetailPage(extensions.SourceRef{Kind: v[1], ID: v[2]}, "", true)
+		}
+	case "detail-return":
+		if len(v) == 3 {
+			return m.extensionDetailPage(extensions.SourceRef{Kind: v[1], ID: v[2]}, "", false)
+		}
+	case "detail-page":
+		if len(v) == 4 {
+			return m.extensionDetailPage(extensions.SourceRef{Kind: v[1], ID: v[2]}, v[3], true)
 		}
 	case "package-detail":
 		if len(v) != 2 {
@@ -270,7 +413,7 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 				continue
 			}
 			info := []pickInfoLine{{Label: "Package", Value: p.Name}, {Label: "Type", Value: p.Type}, {Label: "Status", Value: p.State}, {Label: "Executable", Value: p.Executable}, {Label: "Description", Value: p.Description}, {Label: "Next", Value: p.NextAction}, {Label: "Docs", Value: p.Docs}, {Label: "Authority", Value: "visibility installs, configures, enables, and executes nothing"}}
-			m.menu.openPickerDetailed([]pickItem{{Title: "Back", Value: extensionValue("back"), Info: info}}, "", "extensions")
+			m.menu.openPickerDrill([]pickItem{{Title: "Back", Value: extensionValue("back"), Info: info}}, "", "extensions")
 			m.relayout()
 			return m, nil
 		}
@@ -280,7 +423,7 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		}
 		name := v[1]
 		rows := []pickItem{{Title: "Preview instructions", Value: extensionValue("action", "skills", "preview", name)}, {Title: "Use with arguments…", Value: extensionValue("skill-use", name)}, {Title: "Disable for this session", Value: extensionValue("action", "skills", "disable", name)}, {Title: "Enable for this session", Value: extensionValue("action", "skills", "enable", name)}, {Title: "Back", Value: extensionValue("back", "skills")}}
-		m.menu.openPickerDetailed(rows, "", "extensions")
+		m.menu.openPickerDrill(rows, "", "extensions")
 		m.relayout()
 		return m, nil
 	case "skill-use":
@@ -306,7 +449,7 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		info := []pickInfoLine{{Label: "Source", Value: ref.String()}, {Label: "Executable", Value: c.Command}, {Label: "Arguments", Value: extensions.DisplayText(string(args), 2048)}, {Label: "Manifest", Value: c.Manifest}, {Label: "Endpoint", Value: c.URL}, {Label: "Network ceiling", Value: fmt.Sprint(c.Network || c.Transport == "http")}, {Label: "Authority", Value: "enable source only; business calls still require approval"}}
 		capabilities, _ := json.Marshal(map[string]any{"state_dir": c.StateDir, "setup": c.Setup, "setup_variants": c.SetupVariants, "setup_origins": c.SetupOrigins, "executables": c.Executables, "skills": c.Skills, "confirm_tools": c.ConfirmTools, "aggregate_tools": c.AggregateTools})
 		info = append(info, pickInfoLine{Label: "Local capabilities", Value: extensions.DisplayText(string(capabilities), 4096)})
-		m.menu.openPickerDetailed([]pickItem{{Title: "Cancel", Value: extensionValue("detail", ref.Kind, ref.ID), Info: info}, {Title: "Approve and enable for this session", Status: "runs third-party code when used", StatusTone: pickWarn, Value: extensionValue("action", ref.Kind, "enable", ref.ID, "--yes"), Info: info}, {Title: "Approve, enable and save", Value: extensionValue("action", ref.Kind, "enable", ref.ID, "--yes", "--save"), Info: info}}, "", "extensions")
+		m.menu.openPickerDrill([]pickItem{{Title: "Cancel", Value: extensionValue("detail-return", ref.Kind, ref.ID), Info: info}, {Title: "Approve and enable for this session", Status: "runs third-party code when used", StatusTone: pickWarn, Value: extensionValue("action", ref.Kind, "enable", ref.ID, "--yes"), Info: info}, {Title: "Approve, enable and save", Value: extensionValue("action", ref.Kind, "enable", ref.ID, "--yes", "--save"), Info: info}}, "", "extensions")
 		m.relayout()
 		return m, nil
 	case "attach":
@@ -321,7 +464,7 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		}
 	case "confirm-reset":
 		if len(v) == 3 {
-			m.menu.openPickerDetailed([]pickItem{{Title: "Cancel", Value: extensionValue("detail", v[1], v[2])}, {Title: "Delete this source's local login state (not server-side consent)", StatusTone: pickWarn, Value: extensionValue("action", v[1], "reset", v[2], "--yes")}}, "", "extensions")
+			m.menu.openPickerDrill([]pickItem{{Title: "Cancel", Value: extensionValue("detail-return", v[1], v[2])}, {Title: "Delete this source's local login state (not server-side consent)", StatusTone: pickWarn, Value: extensionValue("action", v[1], "reset", v[2], "--yes")}}, "", "extensions")
 			m.relayout()
 		}
 		return m, nil
@@ -364,8 +507,8 @@ func (m Model) runExtension(kind string, args []string) (tea.Model, tea.Cmd) {
 				rows = append(rows, pickItem{Title: extensions.DisplayText(t.Spec.Name, 256), Status: t.State, Value: extensionValue("action", kind, "inspect", ref.ID), Info: []pickInfoLine{{Label: "Model name", Value: t.ModelName}, {Label: "Description", Value: t.Spec.Description}, {Label: "Schema", Value: extensions.DisplayText(string(raw), 2048)}, {Label: "Read-only hint", Value: fmt.Sprintf("%t · source-declared, not authorization", t.Spec.Hints.ReadOnly)}, {Label: "Policy", Value: t.Reason}}})
 			}
 		}
-		rows = append(rows, pickItem{Title: "Back", Value: extensionValue("detail", kind, args[1])})
-		m.menu.openPickerDetailed(rows, "", "extensions")
+		rows = append(rows, pickItem{Title: "Back", Value: extensionValue("detail-return", kind, args[1])})
+		m.menu.openPickerDrill(rows, "", "extensions")
 		m.relayout()
 		return m, nil
 	}
@@ -387,8 +530,8 @@ func (m Model) runExtension(kind string, args []string) (tea.Model, tea.Cmd) {
 				rows = append(rows, pickItem{Title: it.Name, Detail: it.Description, Value: value})
 			}
 		}
-		rows = append(rows, pickItem{Title: "Back", Value: extensionValue("detail", kind, args[1])})
-		m.menu.openPickerDetailed(rows, "", "extensions")
+		rows = append(rows, pickItem{Title: "Back", Value: extensionValue("detail-return", kind, args[1])})
+		m.menu.openPickerDrill(rows, "", "extensions")
 		m.relayout()
 		return m, nil
 	}

@@ -853,8 +853,8 @@ func TestModelPickerSelectSwitches(t *testing.T) {
 
 // TestModelPickerTwoStageConfirm drives both stages: choosing a model opens
 // the levels (with the current one marked), confirming a level switches the
-// model and applies the level in one step, and Esc on stage 2 cancels the
-// whole flow.
+// model and applies the level in one step, and Esc on stage 2 returns to the
+// model picker before a second Esc cancels.
 func TestModelPickerTwoStageConfirm(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
 	m := NewModel(Options{})
@@ -878,12 +878,19 @@ func TestModelPickerTwoStageConfirm(t *testing.T) {
 		t.Errorf("level picker mark = %q, want the current level high", gm2.menu.pickMark)
 	}
 
-	// Esc cancels stage 2 and leaves the model untouched.
-	canceled := gm2
-	canceled.menu.close()
-	if canceled.menu.picking() || canceled.live.Model != "m-a" || canceled.live.ThinkingLevel != agentcore.ThinkingHigh {
-		t.Errorf("Esc cancel changed state: picking=%v model=%q level=%q",
-			canceled.menu.picking(), canceled.live.Model, canceled.live.ThinkingLevel)
+	// Esc on stage 2 goes back to the model picker and changes no live state.
+	back, _ := gm2.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	gmBack := back.(Model)
+	if !gmBack.menu.picking() || gmBack.menu.pickKind != "model" {
+		t.Fatalf("Esc should return to the model picker: picking=%v kind=%q", gmBack.menu.picking(), gmBack.menu.pickKind)
+	}
+	if gmBack.live.Model != "m-a" || gmBack.live.ThinkingLevel != agentcore.ThinkingHigh {
+		t.Errorf("back changed state: model=%q level=%q", gmBack.live.Model, gmBack.live.ThinkingLevel)
+	}
+	// A second Esc closes the menu entirely.
+	closed, _ := gmBack.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if closed.(Model).menu.picking() {
+		t.Error("second Esc should close the menu")
 	}
 
 	// Confirm the highlighted level (the fallback ladder starts at low ...).

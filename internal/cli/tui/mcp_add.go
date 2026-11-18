@@ -51,7 +51,7 @@ func (m Model) openMCPAddPicker() (tea.Model, tea.Cmd) {
 		{Title: "Enter local command…", Value: extensionValue("mcp-add-mode", "stdio")},
 		{Title: "Back", Value: extensionValue("back")},
 	}
-	m.menu.openPickerDetailed(rows, "", "extensions")
+	m.menu.openPickerDrill(rows, "", "extensions")
 	m.menu.pickHint = "↑↓ Select · Enter · Esc Close"
 	m.relayout()
 	return m, nil

@@ -64,11 +64,9 @@ func TestLarkWizardDefaultsAndPrivateSecret(t *testing.T) {
 		t.Fatal("secret was rendered")
 	}
 	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.larkWizard.phase != "domains" || len(m.larkWizard.selectedDomains()) != len(larkWizardDomains) {
-		t.Fatal("all Lark domains should start selected")
+	if m.larkWizard.phase != "review" || len(m.larkWizard.selectedDomains()) != len(larkWizardDomains) {
+		t.Fatal("the optional steps should be skipped and all Lark services should start selected")
 	}
-	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyEnter}) // domains
-	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyEnter}) // Project remains optional
 	if m.larkWizard.phase != "review" || strings.Contains(m.View().Content, secret) {
 		t.Fatal("review leaked secret or did not advance")
 	}
@@ -83,5 +81,32 @@ func TestLarkWizardDefaultsAndPrivateSecret(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(m.transcript.contentLines(), "\n"), secret) {
 		t.Fatal("Lark secret leaked into the conversation")
+	}
+}
+
+// The two optional choices live behind review keys instead of forcing every
+// operator through service selection and a Project prompt.
+func TestLarkWizardReviewKeepsOptionalStepsOutOfTheMainFlow(t *testing.T) {
+	m := extensionModel(t)
+	m.larkWizard = &larkSetupWizard{
+		phase: "review", pkg: extensions.ManagedPackage{Executable: "/helper"},
+		larkCLI: "/lark-cli", projectCLI: "/project-cli", projectHost: "project.feishu.cn",
+		domains: []bool{true, true, true, true, true, true, true, true},
+	}
+	m = apply(t, m, runeKey('d'))
+	if m.larkWizard.phase != "domains" {
+		t.Fatalf("d did not open the optional service list: %q", m.larkWizard.phase)
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.larkWizard.phase != "review" {
+		t.Fatalf("service list did not return to review: %q", m.larkWizard.phase)
+	}
+	m = apply(t, m, runeKey('p'))
+	if !m.larkWizard.project || m.larkWizard.phase != "project-host" {
+		t.Fatalf("p did not include Project with its default host: %q", m.larkWizard.phase)
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.larkWizard.phase != "review" || m.larkWizard.projectHost != "project.feishu.cn" {
+		t.Fatalf("project host step did not return to review: %q", m.larkWizard.phase)
 	}
 }
