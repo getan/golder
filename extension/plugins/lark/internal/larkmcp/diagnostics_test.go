@@ -83,7 +83,7 @@ func TestCLIDiagnosticsPrivacyAcrossMessagesDataAndArguments(t *testing.T) {
 	}
 }
 
-func TestCLIDiagnosticsHandleNoticesButWithholdUnknownStderr(t *testing.T) {
+func TestCLIDiagnosticsHandleNoticesAndBoundBusinessStderr(t *testing.T) {
 	p := New(Config{}, nil)
 	out := Output{Code: 4, Stdout: []byte(`{"code":0,"msg":"success"}`), Stderr: []byte("notice: private-notice\n{\n  \"error\": {\"type\":\"network\",\"code\":\"NETWORK_ERROR\",\"message\":\"connection timed out\"}\n}\n")}
 	r := p.withCLIDiagnostics(normalize("lark", out, nil, false), []string{"drive", "+search"}, out, nil)
@@ -93,8 +93,21 @@ func TestCLIDiagnosticsHandleNoticesButWithholdUnknownStderr(t *testing.T) {
 	out = Output{Code: 4, Stderr: []byte("private free-form debug log Bearer private-token")}
 	r = p.withCLIDiagnostics(normalize("lark", out, nil, false), []string{"drive", "+search"}, out, nil)
 	encoded, _ := json.Marshal(r)
-	if strings.Contains(string(encoded), "private-token") || strings.Contains(string(encoded), "private free-form") || r.Diagnostics.ErrorSource != "unstructured_stderr_withheld" || *r.Diagnostics.ExitCode != 4 {
-		t.Fatalf("unknown stderr escaped the allowlist: %s", encoded)
+	if strings.Contains(string(encoded), "private-token") || !strings.Contains(r.Diagnostics.StderrExcerpt, "private free-form") || r.Diagnostics.ErrorSource != "unstructured_stderr" || *r.Diagnostics.ExitCode != 4 {
+		t.Fatalf("business stderr was not exposed with redaction: %s", encoded)
+	}
+	// Authorization/setup output keeps device codes and links private.
+	out = Output{Code: 4, Stderr: []byte("device_code=private-device https://auth.example/device")}
+	r = p.withCLIDiagnostics(normalize("lark", out, nil, false), []string{"auth", "login"}, out, nil)
+	encoded, _ = json.Marshal(r)
+	if strings.Contains(string(encoded), "private-device") || r.Diagnostics.ErrorSource != "unstructured_stderr_withheld" || r.Diagnostics.StderrExcerpt != "" {
+		t.Fatalf("authorization stderr escaped the private path: %s", encoded)
+	}
+	// A budget hit reports incompleteness instead of silently truncating.
+	out = Output{Code: 1, Truncated: true, StderrTruncated: true, Stderr: []byte("partial business stderr")}
+	r = p.withCLIDiagnostics(normalize("lark", out, nil, false), []string{"drive", "+search"}, out, nil)
+	if r.Diagnostics.ErrorSource != "truncated_output" || !r.Diagnostics.StderrTruncated || !strings.Contains(r.Diagnostics.StderrExcerpt, "partial business stderr") || !strings.Contains(r.Diagnostics.StderrExcerpt, "truncated at the 96 KiB") {
+		t.Fatalf("truncated stderr was not reported as incomplete: %+v", r.Diagnostics)
 	}
 }
 

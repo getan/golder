@@ -3,6 +3,7 @@ package larkmcp
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +127,54 @@ func TestTicketSearchMeUsesOnlyCurrentStatusOperator(t *testing.T) {
 	result = p.Call(context.Background(), "ticket_search", json.RawMessage(`{"options":{"project_key":"project","work_item_type":"bug"}}`))
 	if !result.OK || len(f.calls) != 1 || strings.Contains(f.calls[0], "current_status_operator") {
 		t.Fatalf("omitting assignee did not omit its filter: result=%+v calls=%v", result, f.calls)
+	}
+}
+
+func TestTicketSearchRelatedReportsCoverage(t *testing.T) {
+	f := &fakeRunner{}
+	p := New(Config{}, f)
+	result := p.Call(context.Background(), "ticket_search", json.RawMessage(`{"options":{"project_key":"project","work_item_type":"bug","related":true}}`))
+	if !result.OK || len(f.calls) != 1 || !strings.Contains(f.calls[0], "current_status_operator") {
+		t.Fatalf("related query did not use the verified relation: result=%+v calls=%v", result, f.calls)
+	}
+	if result.Query == nil || result.Query.State != "partial" ||
+		!slices.Contains(result.Query.Checked, "current_status_operator") ||
+		!slices.Contains(result.Query.Uncovered, "creator") ||
+		!slices.Contains(result.Query.Uncovered, "watcher") ||
+		!slices.Contains(result.Query.Uncovered, "project_roles") {
+		t.Fatalf("related coverage was not explicit: %+v", result.Query)
+	}
+}
+
+func TestTicketSearchEmptySemanticsAreExplicit(t *testing.T) {
+	total := 0
+	cases := []struct {
+		name   string
+		stdout string
+		state  string
+		total  *int
+	}{
+		{"ambiguous empty", `{"ok":true,"data":{},"list":null}`, "empty_unconfirmed", nil},
+		{"confirmed zero", `{"ok":true,"data":{"total":0,"list":[]}}`, "zero_confirmed", &total},
+		{"more pages", `{"ok":true,"data":{"list":[{"id":"1"}],"has_more":true}}`, "partial", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeRunner{fn: func(string, []string, []byte) (Output, error) {
+				return Output{Stdout: []byte(tc.stdout)}, nil
+			}}
+			p := New(Config{}, f)
+			result := p.Call(context.Background(), "ticket_search", json.RawMessage(`{"options":{"project_key":"project","work_item_type":"bug"}}`))
+			if !result.OK || result.Query == nil || result.Query.State != tc.state {
+				t.Fatalf("result=%+v", result)
+			}
+			if tc.total != nil && (result.Query.Total == nil || *result.Query.Total != *tc.total) {
+				t.Fatalf("total = %v, want %d", result.Query.Total, *tc.total)
+			}
+			if tc.total == nil && result.Query.Total != nil {
+				t.Fatalf("invented a total: %v", result.Query.Total)
+			}
+		})
 	}
 }
 

@@ -19,12 +19,13 @@ func tailSchema(execute bool) json.RawMessage {
 		key = "argv"
 	}
 	props := map[string]any{"service": map[string]any{"type": "string", "enum": []string{"lark", "project"}}, key: map[string]any{
-		"type": "array", "minItems": 1, "maxItems": 64,
-		"description": "Inline business arguments. Omit --as, --format, --yes, --force and --no-confirm; the adapter controls identity, output format and confirmation. cli_help only covers business commands; it cannot query auth/config/install. Skill CLI examples are not MCP capabilities.",
+		"type": "array", "minItems": 0, "maxItems": 64,
+		"description": "Inline business arguments. Omit --as, --format, --yes, --force and --no-confirm; the adapter controls identity, output format and confirmation. For cli_help, an empty command returns root help. cli_help only covers business commands; it cannot query auth/config/install. Skill CLI examples are not MCP capabilities.",
 		"items":       map[string]any{"type": "string", "maxLength": 16000},
 	}}
 	required := []string{"service", key}
 	if execute {
+		props[key].(map[string]any)["minItems"] = 1
 		props["confirm"] = map[string]any{"type": "boolean", "const": true}
 		props["high_risk"] = map[string]any{"type": "boolean", "default": false, "description": "Set only when the CLI command is high-risk. The adapter appends --yes after exact-call host approval."}
 		required = append(required, "confirm")
@@ -45,8 +46,16 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 		return failure("", "INVALID_ARGUMENTS", "Invalid long-tail request", "Use cli_help first")
 	}
 	if name == "cli_help" {
+		if in.Service != "lark" && in.Service != "project" {
+			return failure(in.Service, "INVALID_ARGUMENTS", "cli_help needs service lark or project", "Use cli_help with service=lark or service=project; no command was executed")
+		}
+		if len(in.Command) == 0 {
+			args := []string{"--help"}
+			out, err := p.Runner.Run(ctx, in.Service, args, nil)
+			return p.withCLIDiagnostics(normalize(in.Service, out, err, false), args, out, err)
+		}
 		if err := validateCommandPath(in.Service, in.Command, false); err != nil {
-			return failure(in.Service, "COMMAND_BLOCKED", err.Error(), "Use a business or raw command path; for login or incremental scopes use Golder's Lark/Project authorization/settings entry; skill CLI examples are not MCP tools")
+			return failure(in.Service, "COMMAND_BLOCKED", err.Error(), "Use an empty command for root help, or a business/raw command family; for login or incremental scopes use Golder's Lark/Project authorization/settings entry; skill CLI examples are not MCP tools; no command was executed")
 		}
 		args := append(append([]string{}, in.Command...), "--help")
 		out, err := p.Runner.Run(ctx, in.Service, args, nil)
@@ -67,7 +76,14 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 		pathLen = commandPathLen(in.Argv, 3)
 	}
 	if err := validateCommandPath(in.Service, in.Argv[:pathLen], business); err != nil {
-		return failure(in.Service, "COMMAND_BLOCKED", err.Error(), "Use setup for authorization; management/raw API commands are not exposed")
+		next := "Use cli_help for this installed CLI version; no command was executed"
+		if business && in.Service == "lark" && len(in.Argv) >= 2 && !strings.HasPrefix(in.Argv[1], "+") {
+			next = "cli_call only takes Lark +shortcuts; use cli_raw for raw resource commands such as drive files list. The command was not executed."
+		}
+		if !business && in.Service == "lark" && len(in.Argv) >= 2 && strings.HasPrefix(in.Argv[1], "+") {
+			next = "cli_raw is for raw resource commands; use cli_call for +shortcuts. The command was not executed."
+		}
+		return failure(in.Service, "COMMAND_BLOCKED", err.Error(), next)
 	}
 	if err := businessFlags(in.Service, in.Argv[:pathLen], in.Argv[pathLen:]); err != nil {
 		return failure(in.Service, "ARGUMENT_BLOCKED", err.Error(), "Omit --as/--format/confirmation flags; use only approved inline business parameters, not local-file or configuration references")

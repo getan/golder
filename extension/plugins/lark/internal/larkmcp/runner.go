@@ -22,6 +22,9 @@ type Output struct {
 	Stderr    []byte
 	Code      int
 	Truncated bool
+	// Per-stream flags let diagnostics name which capture hit the budget.
+	StdoutTruncated bool
+	StderrTruncated bool
 }
 
 type Runner interface {
@@ -86,7 +89,10 @@ func (r NativeRunner) Run(ctx context.Context, service string, args []string, in
 	var stdout, stderr cappedBuffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
-	result := Output{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Truncated: stdout.truncated || stderr.truncated}
+	result := Output{
+		Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Truncated: stdout.truncated || stderr.truncated,
+		StdoutTruncated: stdout.truncated, StderrTruncated: stderr.truncated,
+	}
 	if ctx.Err() != nil {
 		return result, ctx.Err()
 	}
@@ -145,6 +151,19 @@ type Result struct {
 	Verification   string          `json:"verification,omitempty"`
 	Readback       any             `json:"readback,omitempty"`
 	Diagnostics    *CLIDiagnostics `json:"diagnostics,omitempty"`
+	Query          *QueryInfo      `json:"query,omitempty"`
+}
+
+// QueryInfo states what a search actually established. Zero is reported only
+// when the upstream response carries a total of zero; an empty-looking payload
+// stays unconfirmed, and uncovered relations are named instead of guessed.
+type QueryInfo struct {
+	State     string   `json:"state"` // zero_confirmed, empty_unconfirmed, partial, complete, failed
+	Total     *int     `json:"total,omitempty"`
+	HasMore   *bool    `json:"has_more,omitempty"`
+	Checked   []string `json:"checked,omitempty"`
+	Uncovered []string `json:"uncovered,omitempty"`
+	Note      string   `json:"note,omitempty"`
 }
 
 type Failure struct {

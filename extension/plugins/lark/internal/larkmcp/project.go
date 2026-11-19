@@ -28,7 +28,10 @@ func (p *Plugin) project(ctx context.Context, d definition, in input, operation 
 			}
 			return failure("project", "INVALID_QUERY", err.Error(), "Discover a real project/type and use structured filters")
 		}
-		return p.run(ctx, "project", projectArgs(operation.Command, params), false)
+		related, _ := o["related"].(bool)
+		result := p.run(ctx, "project", projectArgs(operation.Command, params), false)
+		annotateTicketSearch(&result, related)
+		return result
 	}
 	if d.Name == "project_schema" && in.Operation == "decode_url" {
 		rawURL, _ := o["url"].(string)
@@ -165,6 +168,12 @@ func searchParams(o map[string]any) (map[string]any, error) {
 			return nil, errSearchAssignee
 		}
 	}
+	related, _ := o["related"].(bool)
+	if value, present := o["related"]; present {
+		if _, ok := value.(bool); !ok {
+			return nil, errors.New("related must be a boolean")
+		}
+	}
 	if session, _ := o["session_id"].(string); session != "" {
 		if o["group_pagination_list"] == nil {
 			return nil, errors.New("continuation needs group_pagination_list")
@@ -194,7 +203,15 @@ func searchParams(o map[string]any) (map[string]any, error) {
 	if status, _ := o["status"].(string); status != "" {
 		conditions = append(conditions, "`work_item_status` = '"+strings.ReplaceAll(status, "'", "''")+"'")
 	}
+	assigneePresent := false
 	if _, present := o["assignee"]; present {
+		assigneePresent = true
+		conditions = append(conditions, "array_contains(`current_status_operator`, current_login_user())")
+	}
+	// related adds the one relation this adapter has verified. Creator,
+	// requester, watcher and role membership are reported as uncovered rather
+	// than guessed into MQL.
+	if related && !assigneePresent {
 		conditions = append(conditions, "array_contains(`current_status_operator`, current_login_user())")
 	}
 	if len(conditions) > 0 {
@@ -202,6 +219,97 @@ func searchParams(o map[string]any) (map[string]any, error) {
 	}
 	query += fmt.Sprintf(" LIMIT %d", limit)
 	return map[string]any{"project_key": project, "mql": query}, nil
+}
+
+// annotateTicketSearch reports what a query established. It never converts a
+// permission/parse failure or an empty-looking payload into a zero result.
+func annotateTicketSearch(r *Result, related bool) {
+	if r.Error != nil {
+		r.Query = &QueryInfo{State: "failed"}
+		return
+	}
+	info := &QueryInfo{}
+	if related {
+		info.Checked = []string{"current_status_operator"}
+		info.Uncovered = []string{"creator", "requester", "watcher", "project_roles"}
+		info.State = "partial"
+		info.Note = "related currently covers only the verified current_status_operator relation; creator, requester, watcher and role membership are not included because upstream MQL support was not verified"
+	}
+	total, hasTotal := projectTotal(r.Data)
+	if hasTotal {
+		info.Total = &total
+	}
+	hasList, listLen, hasMore := projectList(r.Data)
+	if hasMore != nil {
+		info.HasMore = hasMore
+	}
+	if info.State == "" {
+		switch {
+		case hasTotal && total == 0:
+			info.State = "zero_confirmed"
+		case hasList && listLen > 0 && hasMore != nil && *hasMore:
+			info.State = "partial"
+		case hasList && listLen > 0:
+			info.State = "complete"
+		case hasList && listLen == 0 && hasTotal:
+			info.State = "zero_confirmed"
+		default:
+			info.State = "empty_unconfirmed"
+			info.Note = "the response has no total and no list that proves zero; empty semantics are not confirmed"
+		}
+	}
+	r.Query = info
+}
+
+func projectTotal(data any) (int, bool) {
+	look := func(object map[string]any) (int, bool) {
+		for _, key := range []string{"total", "total_count", "count"} {
+			switch value := object[key].(type) {
+			case float64:
+				return int(value), true
+			case json.Number:
+				if n, err := value.Int64(); err == nil {
+					return int(n), true
+				}
+			case int:
+				return value, true
+			}
+		}
+		return 0, false
+	}
+	if object, ok := data.(map[string]any); ok {
+		if n, ok := look(object); ok {
+			return n, true
+		}
+		if nested, ok := object["data"].(map[string]any); ok {
+			if n, ok := look(nested); ok {
+				return n, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func projectList(data any) (bool, int, *bool) {
+	check := func(object map[string]any) (bool, int, *bool) {
+		var more *bool
+		if value, ok := object["has_more"].(bool); ok {
+			more = &value
+		}
+		if list, ok := object["list"].([]any); ok {
+			return true, len(list), more
+		}
+		return false, 0, more
+	}
+	if object, ok := data.(map[string]any); ok {
+		if has, n, more := check(object); has || more != nil {
+			return has, n, more
+		}
+		if nested, ok := object["data"].(map[string]any); ok {
+			return check(nested)
+		}
+	}
+	return false, 0, nil
 }
 
 func subset(input map[string]any, keys ...string) map[string]any {

@@ -25,6 +25,10 @@ type CLIDiagnostics struct {
 	MissingScopes  []string `json:"missing_scopes,omitempty"`
 	StdoutBytes    int      `json:"stdout_bytes_captured"`
 	StderrBytes    int      `json:"stderr_bytes_captured"`
+	// StderrExcerpt is bounded, redacted business stderr. It is withheld for
+	// auth/config/install paths, where device codes and authorization links live.
+	StderrExcerpt   string `json:"stderr_excerpt,omitempty"`
+	StderrTruncated bool   `json:"stderr_truncated,omitempty"`
 }
 
 var diagnosticCode = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
@@ -162,7 +166,11 @@ func (p *Plugin) withCLIDiagnostics(r Result, args []string, out Output, runErr 
 	}
 	r.Diagnostics = d
 	if out.Truncated {
-		d.ErrorSource = "truncated_output_withheld"
+		d.ErrorSource = "truncated_output"
+		d.StderrTruncated = out.StderrTruncated
+		if stderrExposureAllowed(args) && len(out.Stderr) > 0 {
+			d.StderrExcerpt = stderrExcerpt(out, p.Config.AppSecret)
+		}
 		return r
 	}
 	if r.Error.Code == "IDENTITY_MISMATCH" {
@@ -224,7 +232,13 @@ func (p *Plugin) withCLIDiagnostics(r Result, args []string, out Output, runErr 
 		break
 	}
 	if d.ErrorSource == "none" && len(out.Stderr) > 0 {
-		d.ErrorSource = "unstructured_stderr_withheld"
+		if stderrExposureAllowed(args) {
+			d.ErrorSource = "unstructured_stderr"
+			d.StderrTruncated = out.StderrTruncated
+			d.StderrExcerpt = stderrExcerpt(out, p.Config.AppSecret)
+		} else {
+			d.ErrorSource = "unstructured_stderr_withheld"
+		}
 		if match := diagnosticFlagError.FindSubmatch(out.Stderr); match != nil && out.Code != 10 {
 			d.CLIType, d.ErrorSource = "validation", "stderr_argument_error"
 			r.Error.Code, r.Error.Message = "CLI_ARGUMENT_ERROR", "Native CLI reports "+string(match[1])+" for "+string(match[2])
@@ -239,6 +253,29 @@ func (p *Plugin) withCLIDiagnostics(r Result, args []string, out Output, runErr 
 	}
 	r.Error.Message = diagnosticText(r.Error.Message, p.Config.AppSecret)
 	return r
+}
+
+func stderrExcerpt(out Output, secret string) string {
+	text := diagnosticText(string(out.Stderr), secret)
+	if out.StderrTruncated {
+		text += "\n[stderr truncated at the 96 KiB capture limit]"
+	}
+	return text
+}
+
+// stderrExposureAllowed keeps auth/config/install output private: those paths
+// carry device codes and authorization links that must not enter the model
+// context. Business stderr may still contain sensitive data, so the excerpt is
+// redacted and bounded rather than trusted.
+func stderrExposureAllowed(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch strings.ToLower(args[0]) {
+	case "auth", "config", "install", "login", "logout", "setup", "token", "scope", "scopes":
+		return false
+	}
+	return true
 }
 
 func diagnosticData(value any, secret string) any {

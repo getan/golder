@@ -38,14 +38,35 @@
 
 - 实际 helper 版本、退出码（进程取消/启动失败时不虚构退出码）。
 - `argv_shape`：业务命令、参数名、显式空串和固定的 `--as=user`；普通参数值、查询文本、正文和 JSON payload 均隐藏。
-- 错误来源：`stdout_json`、`stderr_json`、已知参数错误、未结构化 stderr 被隐藏，或 runner/输出预算错误。
+- 错误来源：`stdout_json`、`stderr_json`、`stderr_argument_error`、`unstructured_stderr`、`truncated_output`、`unstructured_stderr_withheld`（仅 auth/config/install），或 runner 错误。
 - 上游提供时保留公共 error code、错误类型、脱敏 message、log/request ID、HTTP status、missing scopes。
 - `required_scopes` 是适配命令的预期权限，不是假称服务器已经确认 missing scopes。
-- 捕获的 stdout/stderr 字节数。这是预算内已捕获的长度，不冒充完整原始日志的长度。
+- 捕获的 stdout/stderr 字节数；`stderr_truncated` 标明 stderr 是否触及 96 KiB 捕获上限。
+- 业务命令的 `stderr_excerpt`：最多 2 KiB、经脱敏的非结构化 stderr 正文，让未知命令、参数问题和本地 CLI 错误可诊断。
 
-**不把完整 raw stderr 直接交给模型，也不默认保存原始日志。** 只提取公共错误字段；脱敏已知应用密钥、token/header、设备码、JWT、私钥和 URL。错误 message 有长度上限。无法安全识别的自由文本 stderr 只报告其存在与退出码；常见 `unknown flag` / `flag needs an argument` 只返回安全的参数名。
+**业务 stderr 可能包含业务内容或敏感信息，脱敏是纵深防御，不是上游保证。** 适配器只截取有界片段，脱敏应用密钥、token/header、设备码、JWT、私钥和 URL；不默认保存原始日志，也不重跑命令读取后续内容。达到捕获上限时明确报告不完整状态和已捕获/已返回字节数。
+
+`auth`、`config`、`install`、`setup` 等授权路径仍使用 `unstructured_stderr_withheld`：设备码、验证链接和原始输出只留在操作者私有通道。
 
 授权/setup 的设备码、验证链接和原始输出仍保持在操作者私有通道；`--debug`、`--verbose`、凭据/配置/文件参数不会因为调试而向模型开放。诊断不自动重新登录，不自动追加 `--yes`，也不重试结果不明的写入。
+
+## 命令发现与入口选择
+
+- `cli_help` 接受空 `command`，执行根级 `--help`，用于发现当前安装版本的真实命令目录；也接受业务或 raw 命令路径。
+- `cli_call` 只接受 Lark `+shortcuts`；把 raw 资源命令（如 `drive files list`）交给它时返回 `COMMAND_BLOCKED`，并明确提示改用 `cli_raw`、说明未执行。
+- `cli_raw` 用于 raw 资源/API 命令；`auth/config/install` 仍然被本地策略拒绝，错误会说明是本地拦截而不是 CLI 执行失败。
+
+## 相关需求与空结果
+
+`ticket_search` 新增 `related=true`。它只查询当前已验证的 `current_status_operator` 关系，并在 `query.checked` / `query.uncovered` 中明确列出创建人、提出人、关注人和项目角色尚未覆盖；不会把“与我相关”伪装成完整结果，也不会为未验证的上游字段猜测 MQL。
+
+搜索结果新增 `query`：
+
+- `zero_confirmed`：上游返回 `total` 且为 0。
+- `empty_unconfirmed`：响应为空对象/`list: null` 且没有可证明为零的总数；不虚构 `count: 0`。
+- `partial`：还有下一页，或 `related=true` 存在未覆盖关系。
+- `complete`：列表非空且没有更多页。
+- `failed`：查询失败；不把权限/解析失败报告成零条。
 
 ## 升级与验证
 
