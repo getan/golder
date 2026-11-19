@@ -316,7 +316,8 @@ func TestUnnamedCheckboxWithoutBoundContextIsNotDispatched(t *testing.T) {
 		return &agentcore.BeforeToolCallDecision{Network: true}
 	}
 	msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "check", Name: "browser", Arguments: json.RawMessage(`{"action":"check","ref":"@check"}`)}, nil)
-	if !msg.IsError || !strings.Contains(textOf(msg), "browser_target_context_unavailable") {
+	if !msg.IsError || !strings.Contains(textOf(msg), "browser_target_context_unavailable") ||
+		!strings.Contains(textOf(msg), "no accessible name") {
 		t.Fatalf("unbound checkbox was not refused: %s", textOf(msg))
 	}
 	for _, action := range f.actions {

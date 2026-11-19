@@ -1418,6 +1418,16 @@ func browserError(err error) agentcore.AgentToolResult {
 			details["source"], details["dialect"] = "locator_validation", "css"
 		}
 		result.Details = details
+		if len(be.Details) > 0 && string(be.Details) != "null" {
+			var evidence map[string]any
+			if json.Unmarshal(be.Details, &evidence) == nil {
+				for key, value := range evidence {
+					if _, exists := details[key]; !exists {
+						details[key] = value
+					}
+				}
+			}
+		}
 		if be.Code == "browser_paused" || be.Code == "browser_continuation_required" {
 			stop := true
 			result.Terminate = &stop

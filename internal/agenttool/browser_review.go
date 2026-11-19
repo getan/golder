@@ -31,23 +31,56 @@ type browserObservedNode struct {
 }
 
 type browserReviewFacts struct {
-	Browser       string                 `json:"browser"`
-	Tab           string                 `json:"tab,omitempty"`
-	TargetID      string                 `json:"target_id,omitempty"`
-	PageURL       string                 `json:"page_url,omitempty"`
-	Backend       string                 `json:"backend"`
-	Envelope      map[string]any         `json:"envelope"`
-	Locator       map[string]any         `json:"locator,omitempty"`
-	SnapshotID    string                 `json:"snapshot_id,omitempty"`
-	Truncated     *bool                  `json:"snapshot_truncated,omitempty"`
-	MatchCount    int                    `json:"match_count"` // -1 means not known
-	Candidates    []browserReviewNode    `json:"candidates,omitempty"`
-	Parents       []browserReviewNode    `json:"parents,omitempty"`
-	Context       []browserReviewContext `json:"associated_context,omitempty"`
-	NameStatus    string                 `json:"target_name_status,omitempty"`
-	ContextStatus string                 `json:"context_status,omitempty"`
-	Resolution    string                 `json:"resolution"`
-	Fingerprint   string                 `json:"-"` // host-private, especially for HTML/input attributes
+	Browser       string                   `json:"browser"`
+	Tab           string                   `json:"tab,omitempty"`
+	TargetID      string                   `json:"target_id,omitempty"`
+	PageURL       string                   `json:"page_url,omitempty"`
+	Backend       string                   `json:"backend"`
+	Envelope      map[string]any           `json:"envelope"`
+	Locator       map[string]any           `json:"locator,omitempty"`
+	SnapshotID    string                   `json:"snapshot_id,omitempty"`
+	Truncated     *bool                    `json:"snapshot_truncated,omitempty"`
+	MatchCount    int                      `json:"match_count"` // -1 means not known
+	Candidates    []browserReviewNode      `json:"candidates,omitempty"`
+	Parents       []browserReviewNode      `json:"parents,omitempty"`
+	Context       []browserReviewContext   `json:"associated_context,omitempty"`
+	NameStatus    string                   `json:"target_name_status,omitempty"`
+	ContextStatus string                   `json:"context_status,omitempty"`
+	Resolution    string                   `json:"resolution"`
+	Observed      *browserReviewObserved   `json:"observed,omitempty"`
+	Suggested     *browserReviewSuggestion `json:"suggested,omitempty"`
+	Fingerprint   string                   `json:"-"` // host-private, especially for HTML/input attributes
+}
+
+// browserReviewObserved records what the CSS locator did establish. These are
+// observations, not authorization: aria-label is not the accessible name and
+// never lets the reviewed action select a different element.
+type browserReviewObserved struct {
+	AriaLabel  string `json:"aria_label,omitempty"`
+	Title      string `json:"title,omitempty"`
+	LabelledBy string `json:"aria_labelledby,omitempty"`
+	Visible    *bool  `json:"visible,omitempty"`
+	MatchCount int    `json:"match_count"`
+}
+
+// browserReviewSuggestion is evidence for the agent's next reviewed action.
+// RequiresReview is always true: the host never authorizes a target by
+// suggestion, and SnapshotID binds the evidence to the page it came from.
+type browserReviewSuggestion struct {
+	RequiresReview bool                               `json:"requires_review"`
+	SnapshotID     string                             `json:"snapshot_id"`
+	Candidates     []browserReviewSuggestionCandidate `json:"candidates,omitempty"`
+	Locator        map[string]any                     `json:"locator,omitempty"`
+	Confidence     string                             `json:"confidence,omitempty"`
+}
+
+type browserReviewSuggestionCandidate struct {
+	Ref        string `json:"ref,omitempty"`
+	Role       string `json:"role,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Visible    *bool  `json:"visible,omitempty"`
+	Relation   string `json:"relation,omitempty"`
+	Confidence string `json:"confidence,omitempty"`
 }
 
 func browserLocatorAction(action string) bool {
@@ -136,6 +169,55 @@ func (t *BrowserTool) ReviewEvidence(ctx context.Context, args json.RawMessage) 
 func browserNotDispatched(code, message string, details any) error {
 	data, _ := json.Marshal(details)
 	return &browserctl.Error{Code: code, Message: message, ExecutionState: "not_dispatched", Details: data}
+}
+
+// browserReviewHiddenSuggestion offers the visible associated labels the review
+// already observed. It never authorizes selecting one: RequiresReview stays
+// true and SnapshotID binds the evidence to the page it came from.
+func browserReviewHiddenSuggestion(f browserReviewFacts) *browserReviewSuggestion {
+	if f.SnapshotID == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	var candidates []browserReviewSuggestionCandidate
+	for _, parent := range f.Parents {
+		if parent.Ref == "" || seen[parent.Ref] || parent.Name == "" || parent.Visible == nil || !*parent.Visible {
+			continue
+		}
+		seen[parent.Ref] = true
+		candidates = append(candidates, browserReviewSuggestionCandidate{
+			Ref: parent.Ref, Role: parent.Role, Name: parent.Name, Visible: parent.Visible,
+			Relation: "ancestor_label", Confidence: "candidate",
+		})
+		if len(candidates) == 3 {
+			break
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	confidence := "multiple"
+	if len(candidates) == 1 {
+		confidence = "unique"
+		candidates[0].Confidence = "unique"
+	}
+	return &browserReviewSuggestion{
+		RequiresReview: true, SnapshotID: f.SnapshotID, Candidates: candidates, Confidence: confidence,
+	}
+}
+
+// browserReviewCSSSuggestion reports an observed aria-label as a locator the
+// agent may review again. The host does not treat the label as an accessible
+// name and does not dispatch anything on its own.
+func browserReviewCSSSuggestion(f browserReviewFacts) *browserReviewSuggestion {
+	if f.SnapshotID == "" || f.Observed == nil || f.Observed.AriaLabel == "" {
+		return nil
+	}
+	return &browserReviewSuggestion{
+		RequiresReview: true, SnapshotID: f.SnapshotID,
+		Locator:    map[string]any{"name": f.Observed.AriaLabel},
+		Confidence: "observed_aria_label",
+	}
 }
 
 // These host-generated diagnostics describe the evidence, not the reason the
@@ -401,6 +483,11 @@ func observeCSSReviewTarget(ctx context.Context, c *browserctl.Client, a browser
 		return nil
 	}
 	facts.NameStatus = "not_observed_for_css_locator"
+	observed, err := observeCSSAttributes(ctx, c, a, target)
+	if err != nil {
+		return err
+	}
+	facts.Observed = observed
 	text, status, proof, err := browserReviewTargetText(ctx, c, a, target, map[string]any{"selector": a.Selector})
 	if err != nil {
 		return err
@@ -411,6 +498,44 @@ func observeCSSReviewTarget(ctx context.Context, c *browserctl.Client, a browser
 	}
 	facts.Fingerprint = browserTargetFingerprint(facts.SnapshotID, []any{proof, facts.ContextStatus})
 	return nil
+}
+
+// observeCSSAttributes records the attributes a bare CSS locator can observe.
+// Missing or unsupported attributes are not an error; a page change is.
+func observeCSSAttributes(ctx context.Context, c *browserctl.Client, a browserArgs, target browserctl.Target) (*browserReviewObserved, error) {
+	read := func(name string) (string, error) {
+		raw, meta, err := c.Action(ctx, "get", map[string]any{"kind": "attr", "attr": name, "selector": a.Selector}, target, 2*time.Second)
+		if err != nil {
+			return "", nil
+		}
+		if !browserReviewMetaMatches(a, meta) {
+			return "", browserNotDispatched("browser_target_changed", "page changed while inspecting locator attributes", nil)
+		}
+		var value *string
+		if json.Unmarshal(raw, &value) != nil || value == nil {
+			return "", nil
+		}
+		return browserSafeReviewText(*value, 256), nil
+	}
+	ariaLabel, err := read("aria-label")
+	if err != nil {
+		return nil, err
+	}
+	title, err := read("title")
+	if err != nil {
+		return nil, err
+	}
+	labelledBy, err := read("aria-labelledby")
+	if err != nil {
+		return nil, err
+	}
+	var visible *bool
+	if raw, meta, err := c.Action(ctx, "is", map[string]any{"kind": "visible", "selector": a.Selector}, target, 2*time.Second); err == nil && browserReviewMetaMatches(a, meta) {
+		_ = json.Unmarshal(raw, &visible)
+	}
+	return &browserReviewObserved{
+		AriaLabel: ariaLabel, Title: title, LabelledBy: labelledBy, Visible: visible, MatchCount: 1,
+	}, nil
 }
 
 // Read only the exact target's rendered text, never its inputs or an enclosing
@@ -490,13 +615,19 @@ func (t *BrowserTool) verifyReviewedLocator(ctx context.Context, c *browserctl.C
 	// string alone is not authorization; the ordinary reviewer still decides.
 	needsMeaning := a.Action == "click" || a.Action == "dblclick" || a.Action == "check" || a.Action == "uncheck"
 	if needsMeaning && len(previous.Candidates) == 1 && previous.Candidates[0].Visible != nil && !*previous.Candidates[0].Visible {
-		return browserNotDispatched("browser_target_not_visible", "the reviewed target is hidden; inspect the page rather than clicking another candidate", previous)
+		previous.Suggested = browserReviewHiddenSuggestion(previous)
+		return browserNotDispatched("browser_target_not_visible", "the reviewed target is hidden; a visible associated label may exist, but selecting it requires a new reviewed action; no input was sent", previous)
 	}
 	missingAXContext := previous.NameStatus == "no_accessible_name" && len(previous.Context) == 0
 	missingCSSContext := previous.NameStatus == "not_observed_for_css_locator" &&
 		(len(previous.Candidates) != 1 || previous.Candidates[0].Text == "" || previous.Candidates[0].Text == "[credential-like text withheld]")
 	if needsMeaning && (missingAXContext || missingCSSContext) {
-		return browserNotDispatched("browser_target_context_unavailable", "target has no accessible name or verified visible context; inspect the page and narrow to an element with its visible label; no input was sent", previous)
+		message := "target has no accessible name and no verified associated visible text; use a snapshot ref or a visible labeled element; no input was sent"
+		if missingCSSContext {
+			message = "the CSS locator did not establish the control's accessible name (the element may still have aria-label or a visible label); use a role/name locator or a snapshot ref instead of a bare CSS selector; no input was sent"
+			previous.Suggested = browserReviewCSSSuggestion(previous)
+		}
+		return browserNotDispatched("browser_target_context_unavailable", message, previous)
 	}
 	current := browserReviewFacts{MatchCount: -1}
 	if err := t.observeReviewTarget(ctx, c, a, &current); err != nil {
