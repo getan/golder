@@ -94,6 +94,8 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 				return cfg.TavilyAPIKey
 			case "EXA_API_KEY":
 				return cfg.ExaAPIKey
+			case "DEEPSEEK_API_KEY":
+				return cfg.DeepSeekAPIKey
 			default:
 				return ""
 			}

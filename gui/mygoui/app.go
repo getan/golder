@@ -132,6 +132,9 @@ type App struct {
 	proxySettings  appsession.ProxySettings
 	proxyErr       string
 	proxyNote      string
+	searchSettings appsession.SearchSettings
+	searchErr      string
+	searchNote     string
 	ttySessions    []appsession.TTYSummary
 	display        appsession.DisplaySettings
 	displayErr     string
@@ -271,6 +274,8 @@ type sessionDraft struct {
 // New builds the app around an opened controller.
 func New(ctrl *appsession.Controller) *App {
 	display, displayErr := appsession.LoadDisplaySettings()
+	// Install the desktop search-key lookup before any session creates a tool.
+	_, _ = appsession.LoadSearchSettings()
 	a := &App{
 		ctrl:         ctrl,
 		hub:          appsession.NewSessionHub(ctrl),

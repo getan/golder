@@ -58,8 +58,9 @@ type Config struct {
 	// TavilyAPIKey and ExaAPIKey select the web-search backend. Empty values
 	// leave the keyless DuckDuckGo fallback; keys are passed to the tool, never
 	// written to the environment.
-	TavilyAPIKey string `json:"tavilyApiKey,omitempty"`
-	ExaAPIKey    string `json:"exaApiKey,omitempty"`
+	TavilyAPIKey   string `json:"tavilyApiKey,omitempty"`
+	ExaAPIKey      string `json:"exaApiKey,omitempty"`
+	DeepSeekAPIKey string `json:"deepSeekApiKey,omitempty"`
 	// DebugLog is an optional host-only diagnostic path. The Android backend
 	// appends loop event types and terminal errors (never prompts or secrets)
 	// to it. Empty disables the log.

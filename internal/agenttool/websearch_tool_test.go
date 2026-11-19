@@ -38,7 +38,10 @@ func TestSelectSearchBackend(t *testing.T) {
 	}{
 		{map[string]string{"TAVILY_API_KEY": "t"}, "tavily"},
 		{map[string]string{"EXA_API_KEY": "e"}, "exa"},
+		{map[string]string{"DEEPSEEK_API_KEY": "d"}, "deepseek"},
 		{map[string]string{"TAVILY_API_KEY": "t", "EXA_API_KEY": "e"}, "tavily"},
+		{map[string]string{"EXA_API_KEY": "e", "DEEPSEEK_API_KEY": "d"}, "exa"},
+		{map[string]string{"TAVILY_API_KEY": "t", "DEEPSEEK_API_KEY": "d"}, "tavily"},
 		{map[string]string{}, "duckduckgo"},
 	}
 	for _, c := range cases {
@@ -107,6 +110,39 @@ func TestWebSearchExaHighlights(t *testing.T) {
 	}
 	if bk, _ := res.Details.(map[string]any)["backend"].(string); bk != "exa" {
 		t.Errorf("Details.backend = %q, want exa", bk)
+	}
+}
+
+func TestWebSearchDeepSeek(t *testing.T) {
+	body := `{"results":[` +
+		`{"rerank_score":2.4,"title":"DeepSeek V4","url":"https://example.com/v4","snippet":"short snippet","summary":"long summary"},` +
+		`{"title":"Summary only","url":"https://example.com/summary","snippet":"","summary":"fallback summary"}]}`
+	var gotAuth, gotBody string
+	res := execWebSearch(t, map[string]string{"DEEPSEEK_API_KEY": "dsk"},
+		func(r *http.Request) (*http.Response, error) {
+			if r.URL.Host != "api.deepseek.com" || r.URL.Path != "/v1/tools/search" {
+				t.Errorf("unexpected URL %q", r.URL.String())
+			}
+			gotAuth = r.Header.Get("Authorization")
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			return makeResp(200, "application/json", body), nil
+		}, `{"query":"deepseek v4","count":2}`)
+
+	txt := resultText(res)
+	if gotAuth != "Bearer dsk" {
+		t.Errorf("Authorization = %q, want Bearer dsk", gotAuth)
+	}
+	if !strings.Contains(gotBody, `"query":"deepseek v4"`) || !strings.Contains(gotBody, `"count":2`) {
+		t.Errorf("unexpected request body %s", gotBody)
+	}
+	for _, want := range []string{"via deepseek", "https://example.com/v4", "short snippet", "fallback summary"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("result missing %q:\n%s", want, txt)
+		}
+	}
+	if backend, _ := res.Details.(map[string]any)["backend"].(string); backend != "deepseek" {
+		t.Errorf("Details.backend = %q, want deepseek", backend)
 	}
 }
 

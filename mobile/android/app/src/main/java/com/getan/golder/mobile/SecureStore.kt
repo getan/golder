@@ -25,6 +25,7 @@ object SecureStore {
     private const val API_KEY = "model-api-key"
     private const val TAVILY_KEY = "tavily-api-key"
     private const val EXA_KEY = "exa-api-key"
+    private const val DEEPSEEK_KEY = "deepseek-api-key"
     private const val KEY_ALIAS = "golder-mobile-secrets"
     private const val TRANSFORM = "AES/GCM/NoPadding"
     private const val GCM_TAG_BITS = 128
@@ -93,6 +94,11 @@ object SecureStore {
         save(context, EXA_KEY, key)
 
     fun getExaKey(context: Context): String = read(context, EXA_KEY)
+
+    fun saveDeepSeekKey(context: Context, key: String): Boolean =
+        save(context, DEEPSEEK_KEY, key)
+
+    fun getDeepSeekKey(context: Context): String = read(context, DEEPSEEK_KEY)
 
     private fun save(context: Context, keyName: String, value: String): Boolean = runCatching {
         if (value.isBlank()) {

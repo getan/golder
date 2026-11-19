@@ -187,6 +187,7 @@ private fun GolderApp(initialTask: String = "") {
     var apiKey by remember { mutableStateOf("") }
     var tavilyKey by remember { mutableStateOf("") }
     var exaKey by remember { mutableStateOf("") }
+    var deepSeekKey by remember { mutableStateOf("") }
     var gitToken by remember { mutableStateOf("") }
     var oauthConnected by remember { mutableStateOf(false) }
     var oauthBusy by remember { mutableStateOf(false) }
@@ -429,6 +430,7 @@ private fun GolderApp(initialTask: String = "") {
                 SecureStore.saveAPIKey(context, apiKey)
                 SecureStore.saveTavilyKey(context, tavilyKey)
                 SecureStore.saveExaKey(context, exaKey)
+                SecureStore.saveDeepSeekKey(context, deepSeekKey)
             }
             SettingsStore.save(context, provider, model, thinking, baseUrl, permissionMode, language)
             val config = JSONObject()
@@ -444,6 +446,7 @@ private fun GolderApp(initialTask: String = "") {
                 .put("gitToken", workspaceToken)
             if (tavilyKey.isNotBlank()) config.put("tavilyApiKey", tavilyKey)
             if (exaKey.isNotBlank()) config.put("exaApiKey", exaKey)
+            if (deepSeekKey.isNotBlank()) config.put("deepSeekApiKey", deepSeekKey)
             // The catalog is fixed when the session opens, so remember what this
             // session actually got; a later change triggers a rebuild.
             val attachAndroidUse = AndroidUseBridge.isEnabled(context) &&
@@ -555,6 +558,7 @@ private fun GolderApp(initialTask: String = "") {
         apiKey = withContext(Dispatchers.IO) { SecureStore.getAPIKey(context) }
         tavilyKey = withContext(Dispatchers.IO) { SecureStore.getTavilyKey(context) }
         exaKey = withContext(Dispatchers.IO) { SecureStore.getExaKey(context) }
+        deepSeekKey = withContext(Dispatchers.IO) { SecureStore.getDeepSeekKey(context) }
         tokenLoaded = true
 
         val saved = SettingsStore.load(context)
@@ -847,6 +851,7 @@ private fun GolderApp(initialTask: String = "") {
                 apiKey = apiKey,
                 tavilyKey = tavilyKey,
                 exaKey = exaKey,
+                deepSeekKey = deepSeekKey,
                 gitToken = gitToken,
                 tokenLoaded = tokenLoaded,
                 oauthConnected = oauthConnected,
@@ -893,12 +898,14 @@ private fun GolderApp(initialTask: String = "") {
                     SettingsStore.save(context, provider, model, thinking, url, permissionMode, language)
                     scope.launch(Dispatchers.IO) { SecureStore.saveAPIKey(context, key) }
                 },
-                onSearchKeysChange = { tavily, exa ->
+                onSearchKeysChange = { tavily, exa, deepseek ->
                     tavilyKey = tavily
                     exaKey = exa
+                    deepSeekKey = deepseek
                     scope.launch(Dispatchers.IO) {
                         SecureStore.saveTavilyKey(context, tavily)
                         SecureStore.saveExaKey(context, exa)
+                        SecureStore.saveDeepSeekKey(context, deepseek)
                     }
                 },
                 onTokenChange = { value ->
@@ -1907,6 +1914,7 @@ private fun SettingsScreen(
     apiKey: String,
     tavilyKey: String,
     exaKey: String,
+    deepSeekKey: String,
     gitToken: String,
     tokenLoaded: Boolean,
     oauthConnected: Boolean,
@@ -1933,7 +1941,7 @@ private fun SettingsScreen(
     onPermissionPick: (String) -> Unit,
     onLanguagePick: (String) -> Unit,
     onConnectionPick: (String, String) -> Unit,
-    onSearchKeysChange: (String, String) -> Unit,
+    onSearchKeysChange: (String, String, String) -> Unit,
     onTokenChange: (String) -> Unit,
     onGitHubLogin: () -> Unit,
     onGitHubLogout: () -> Unit,
@@ -2008,7 +2016,7 @@ private fun SettingsScreen(
             )
             OutlinedTextField(
                 value = tavilyKey,
-                onValueChange = { onSearchKeysChange(it, exaKey) },
+                onValueChange = { onSearchKeysChange(it, exaKey, deepSeekKey) },
                 label = { Text("Tavily API key") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
@@ -2022,7 +2030,7 @@ private fun SettingsScreen(
             )
             OutlinedTextField(
                 value = exaKey,
-                onValueChange = { onSearchKeysChange(tavilyKey, it) },
+                onValueChange = { onSearchKeysChange(tavilyKey, it, deepSeekKey) },
                 label = { Text("Exa API key") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
@@ -2034,11 +2042,25 @@ private fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            OutlinedTextField(
+                value = deepSeekKey,
+                onValueChange = { onSearchKeysChange(tavilyKey, exaKey, it) },
+                label = { Text("DeepSeek API key") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                if (language == "zh") "申请地址：https://platform.deepseek.com/api_keys（与 DeepSeek 模型 API 同一个 key）"
+                else "Get a key: https://platform.deepseek.com/api_keys (same key as the DeepSeek model API)",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Text(
                 if (language == "zh") {
-                    "填一个即可；都不填时 websearch 使用无需密钥的 DuckDuckGo，部分网络可能不可用。密钥由 Android Keystore 加密保存。"
+                    "优先级：Tavily → Exa → DeepSeek → DuckDuckGo。填一个即可，最先配置的 provider 生效；都不填时使用无需密钥的 DuckDuckGo，部分网络可能不可用。密钥由 Android Keystore 加密保存。"
                 } else {
-                    "One key is enough. Without either, websearch uses the keyless DuckDuckGo fallback, which may be unreachable on some networks. Keys are stored with Android Keystore."
+                    "Priority: Tavily → Exa → DeepSeek → DuckDuckGo. Configure just one key; the first configured provider wins. With none, the keyless DuckDuckGo fallback is used (may be unreachable on some networks). Keys are stored with Android Keystore."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

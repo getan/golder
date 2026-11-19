@@ -1,6 +1,7 @@
-// This file implements the websearch backends: Tavily and Exa (credentialed
-// JSON APIs) plus a keyless DuckDuckGo HTML fallback. selectSearchBackend picks
-// the first backend whose credential is present, defaulting to DuckDuckGo.
+// This file implements the websearch backends: Tavily, Exa and DeepSeek
+// (credentialed JSON APIs) plus a keyless DuckDuckGo HTML fallback.
+// selectSearchBackend picks the first backend whose credential is present,
+// defaulting to DuckDuckGo.
 package agenttool
 
 import (
@@ -25,14 +26,17 @@ type searchBackend interface {
 }
 
 // selectSearchBackend returns the first backend whose credential env var is set,
-// falling back to the keyless DuckDuckGo backend. The order encodes preference:
-// LLM-optimized Tavily first, then Exa, then the keyless fallback.
+// falling back to the keyless DuckDuckGo backend. The order is the user-visible
+// priority: Tavily, Exa, DeepSeek, then the keyless fallback.
 func selectSearchBackend(getenv func(string) string) searchBackend {
 	if k := strings.TrimSpace(getenv("TAVILY_API_KEY")); k != "" {
 		return tavilyBackend{apiKey: k}
 	}
 	if k := strings.TrimSpace(getenv("EXA_API_KEY")); k != "" {
 		return exaBackend{apiKey: k}
+	}
+	if k := strings.TrimSpace(getenv("DEEPSEEK_API_KEY")); k != "" {
+		return deepSeekBackend{apiKey: k}
 	}
 	return duckDuckGoBackend{}
 }
@@ -140,6 +144,59 @@ func (b exaBackend) search(ctx context.Context, client *http.Client, query strin
 			URL:     r.URL,
 			Snippet: strings.Join(r.Highlights, " … "),
 		})
+	}
+	return out, nil
+}
+
+// --- DeepSeek -------------------------------------------------------------
+
+// deepSeekBackend calls DeepSeek's Search API. It is the raw search endpoint
+// (POST /v1/tools/search), not the model's server-side web tools, and uses the
+// same bearer key as the DeepSeek model API.
+type deepSeekBackend struct{ apiKey string }
+
+func (b deepSeekBackend) name() string { return "deepseek" }
+
+func (b deepSeekBackend) search(ctx context.Context, client *http.Client, query string, count int) ([]searchResult, error) {
+	reqBody, _ := json.Marshal(map[string]any{"query": query, "count": count})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.deepseek.com/v1/tools/search", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+b.apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, searchBodyLimit))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var decoded struct {
+		Results []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Snippet string `json:"snippet"`
+			Summary string `json:"summary"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+	out := make([]searchResult, 0, len(decoded.Results))
+	for _, r := range decoded.Results {
+		snippet := r.Snippet
+		if strings.TrimSpace(snippet) == "" {
+			snippet = r.Summary
+		}
+		out = append(out, searchResult{Title: r.Title, URL: r.URL, Snippet: snippet})
 	}
 	return out, nil
 }

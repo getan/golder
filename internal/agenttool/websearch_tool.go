@@ -6,6 +6,7 @@
 //   - Tavily      when TAVILY_API_KEY is set (LLM-optimized results).
 //   - Exa         when EXA_API_KEY is set (codex's fallback backend; search
 //     with highlights enabled).
+//   - DeepSeek    when DEEPSEEK_API_KEY is set (the raw Search API).
 //   - DuckDuckGo   as a keyless fallback (HTML endpoint, no API key needed).
 //
 // The first backend whose credential is present wins; DuckDuckGo is always the
@@ -20,7 +21,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -140,7 +140,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, id string, args json.RawMes
 	}
 	getenv := t.getenv
 	if getenv == nil {
-		getenv = os.Getenv
+		getenv = defaultSearchEnv
 	}
 
 	backend := selectSearchBackend(getenv)
