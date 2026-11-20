@@ -32,7 +32,7 @@ func TestDesktopLayoutExpiresToKeep(t *testing.T) {
 	d.mu.Lock()
 	d.deadline = time.Now().Add(-time.Second)
 	d.mu.Unlock()
-	if !d.expire(7) || !d.allowed || d.compact {
+	if !d.expire(7) || !d.allowed || d.compact || !d.expired {
 		t.Fatal("expired choice did not degrade to keeping the layout")
 	}
 	if err := d.beforeInput(7); err != nil {

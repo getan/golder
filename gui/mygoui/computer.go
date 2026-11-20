@@ -683,6 +683,11 @@ func (a *App) computerPanel(c *ui.Context) {
 				a.stopComputer()
 			}
 		})
+		if a.computerSession != nil {
+			if notice := a.computerSession.DesktopNotice(); notice != "" {
+				ui.Text(c, notice).Padding(6, 10).FontSize(10.5).TextColor(t.Warning).Wrap()
+			}
+		}
 		if a.computerError != "" {
 			ui.Text(c, a.computerError).Padding(6, 10).FontSize(11).TextColor(t.Warning).Wrap()
 		}

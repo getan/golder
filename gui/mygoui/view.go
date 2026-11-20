@@ -97,6 +97,9 @@ func (a *App) view(c *ui.Context) {
 		ui.Column(c).Fill().Padding(10).Gap(8).Children(func() {
 			status := s.Status()
 			ui.Text(c, "Computer Use · "+status.Target.Application).Bold().Wrap()
+			if notice := s.DesktopNotice(); notice != "" {
+				ui.Text(c, notice).FontSize(10.5).TextColor(t.Warning).Wrap()
+			}
 			if status.Paused {
 				ui.Text(c, "已暂停 / Paused")
 				if subtleButton(c, "交还 Agent / Resume").Clicked() {

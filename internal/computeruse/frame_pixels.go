@@ -10,6 +10,10 @@ import (
 
 const tileCount = 4 // per axis
 
+// JSON carries the 4x4 tile digests as base64, plus nonce and geometry.
+// Derive the limit so raising tileCount cannot silently stop frame leases.
+const maxFrameTokenBytes = 512 + (tileCount*tileCount*sha256.Size*4+2)/3
+
 type frameFingerprint struct {
 	tiles []byte
 }

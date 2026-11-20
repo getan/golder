@@ -201,7 +201,13 @@ typedef struct {
 enum { CU_INPUT_UNVERIFIED, CU_INPUT_OCCLUDED, CU_INPUT_AX_HIT, CU_INPUT_GEOMETRY };
 // Only the synchronous native dispatcher writes refusal; cancellation touches
 // only the atomic flag, and Go reads refusal after the dispatcher returns.
-typedef struct { atomic_int cancelled; int refusal; AXUIElementRef reviewed; } cu_cancel_flag;
+typedef struct {
+	atomic_int cancelled;
+	int refusal;
+	AXUIElementRef reviewed;
+	int coordinate;
+	double px, py;
+} cu_cancel_flag;
 static cu_cancel_flag *cu_cancel_new(void) { return calloc(1, sizeof(cu_cancel_flag)); }
 static void cu_cancel_set(cu_cancel_flag *flag) { atomic_store(&flag->cancelled, 1); }
 static int cu_cancelled(cu_cancel_flag *flag) { return flag && atomic_load(&flag->cancelled); }
@@ -760,7 +766,15 @@ static int cu_probe_point(cu_window selected, AXUIElementRef expected, CGRect bo
 	AXUIElementSetMessagingTimeout(app, 0.3);
 	AXError rc = AXUIElementCopyElementAtPosition(app,p.x,p.y,&hit);
 	CFRelease(app);
-	if (rc != kAXErrorSuccess || !hit) { if (hit) CFRelease(hit); return 1; }
+	if (rc != kAXErrorSuccess || !hit) {
+		// A Chromium window can return no element at all from the system hit
+		// test while still exposing a text control in its AX children. Search
+		// the pinned window root before declaring that there is no AX hit.
+		if (hit) CFRelease(hit);
+		int budget = 128;
+		hit = cu_ax_find_control_at_point(expected, p, 0, &budget, flag);
+		if (!hit) return 1;
+	}
 	if (!cu_direct_control(hit)) {
 		// Chromium can return a container while exposing a text control deeper
 		// in the tree. Search only this pinned window, bounded and non-secure.
@@ -798,16 +812,20 @@ static int cu_probe_point(cu_window selected, AXUIElementRef expected, CGRect bo
 		CFRelease(node); node=(AXUIElementRef)parent;
 	}
 	if (node) CFRelease(node);
-	if (out->member && safe && !cu_cancelled(flag)) {
+	if (hit) {
+		// Role names are classification metadata, not user content. Record the
+		// hit even when it is outside the authorized window or sensitive so the
+		// caller can distinguish no-element, wrong-window and sensitive hits.
 		strcpy(out->role,label);
-		out->safe = text || strcmp(label,"AXButton")==0; // opaque containers aren't proven safe controls
-		if (out->safe) {
+		out->safe = safe;
+		int control = out->member && safe && !cu_cancelled(flag) && (text || strcmp(label,"AXButton")==0);
+		if (control) {
 			out->control = (AXUIElementRef)CFRetain(hit);
 			CGRect control;
 			if (cu_ax_geometry(hit, &control)) out->tiles = cu_ax_tile_mask(bounds, control);
 		}
 		Boolean settable=false;
-		out->editable=text && AXUIElementIsAttributeSettable(hit,kAXValueAttribute,&settable)==kAXErrorSuccess && settable;
+		out->editable=control && text && AXUIElementIsAttributeSettable(hit,kAXValueAttribute,&settable)==kAXErrorSuccess && settable;
 	}
 	CFRelease(hit);
 	return cu_current_bounds(selected,&current) && CGRectEqualToRect(current,bounds);
@@ -822,7 +840,7 @@ static int cu_frame_point_safe(cu_window selected, AXUIElementRef expected, doub
 		if (cu_cancelled(flag) || !cu_frame_bounds_match(selected, bx, by, bw, bh, flag) || !cu_point_unobscured(selected, point, flag)) return 0;
 		AXUIElementRef window = cu_ax_window(selected, 1, flag);
 		if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
-		int ok = operator || cu_point_ax_safe(window, point, flag);
+		int ok = operator || flag->coordinate || cu_point_ax_safe(window, point, flag);
 		CFRelease(window);
 		if (!ok) return 0;
 	}
@@ -897,12 +915,13 @@ static int cu_press_frame(cu_window selected, AXUIElementRef expected, double bx
 	if (!cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
 	AXUIElementRef window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
-	int ok = cu_focused_control_safe(selected, window, flag);
+	CGPoint reviewedPoint = CGPointMake(bx + flag->px*bw, by + flag->py*bh);
+	int ok = flag->coordinate ? cu_point_unobscured(selected, reviewedPoint, flag) : cu_focused_control_safe(selected, window, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag)) return 0;
 	window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
-	ok = cu_focused_control_safe(selected, window, flag);
+	ok = flag->coordinate ? cu_point_unobscured(selected, reviewedPoint, flag) : cu_focused_control_safe(selected, window, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
 	CGEventRef down = CGEventCreateKeyboardEvent(NULL, code, true);
@@ -923,8 +942,16 @@ static AXUIElementRef cu_text_frame_control(cu_window selected, AXUIElementRef e
 	if (!cu_current_bounds(selected, &current) || !CGRectEqualToRect(current, bounds)) return NULL;
 	AXUIElementRef window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return NULL; }
+	if (flag->coordinate) {
+		// The user chose graphical fallback when no AX text control exists. It
+		// still requires this exact focused window and the reviewed point to stay
+		// unobscured; typed text itself cannot be verified by AX.
+		CGPoint point = CGPointMake(bounds.origin.x + flag->px*bounds.size.width, bounds.origin.y + flag->py*bounds.size.height);
+		if (!cu_point_unobscured(selected, point, flag)) { CFRelease(window); return NULL; }
+		return window;
+	}
 	// A person can type into their chosen opaque canvas. This path is not
-	// reachable from Agent calls, and still requires this exact focused window.
+	// reachable from ordinary Agent calls without the coordinate fallback.
 	if (operator) {
 		if (!cu_window_visible_here(selected)) { CFRelease(window); return NULL; }
 		return window;
@@ -961,6 +988,7 @@ static AXUIElementRef cu_text_frame_control(cu_window selected, AXUIElementRef e
 // control and pinned window; no clipboard, shortcuts, or implicit submission.
 static int cu_type_text_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, const char *text, size_t length, cu_cancel_flag *flag, int operator) {
 	if (!text || length == 0 || length > 4096 || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || bw <= 0 || bh <= 0) return 0;
+	if (flag->coordinate) operator = 1;
 	CFStringRef value = CFStringCreateWithBytes(NULL, (const UInt8 *)text, (CFIndex)length, kCFStringEncodingUTF8, false);
 	if (!value) return 0;
 	CGRect bounds = CGRectMake(bx, by, bw, bh);
@@ -1552,10 +1580,11 @@ type macFrameBinding struct {
 }
 
 type macPointReview struct {
-	nonce   string
-	point   [2]float64
-	regions uint16
-	control C.AXUIElementRef
+	nonce      string
+	point      [2]float64
+	regions    uint16
+	control    C.AXUIElementRef
+	coordinate bool
 }
 
 func (c *MacWindowCatalog) clearPointReviewLocked() {
@@ -1668,12 +1697,20 @@ func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, toke
 	// model. context_tiles may add visible context but cannot remove them.
 	required := uint16(hit.tiles) | maskPoint
 	regions := required | mask
-	bound := checked != 0 && ctx.Err() == nil && hit.control != 0 && old.Nonce != "" && required != 0 && sameRegions(old.Tiles, now.Tiles, regions)
-	if bound {
+	role := C.GoString(&hit.role[0])
+	same := sameRegions(old.Tiles, now.Tiles, regions)
+	axBound := checked != 0 && ctx.Err() == nil && hit.control != 0 && old.Nonce != "" && required != 0 && same
+	coordinate := checked != 0 && ctx.Err() == nil && hit.control == 0 &&
+		coordinateFallbackEligible(checked != 0, role, hit.member != 0, hit.safe != 0, hit.visible != 0, old.Nonce != "", required, same)
+	bound := axBound || coordinate
+	if axBound {
 		c.reviewed = macPointReview{nonce: old.Nonce, point: [2]float64{x, y}, regions: regions, control: hit.control}
+	} else if coordinate {
+		c.reviewed = macPointReview{nonce: old.Nonce, point: [2]float64{x, y}, regions: regions, coordinate: true}
 	} else if hit.control != 0 {
 		C.cu_ax_release(hit.control)
 	}
+	gate := c.layoutGate
 	c.mu.Unlock()
 	if err := c.Validate(ctx, target, false); err != nil {
 		return PointInspection{}, err
@@ -1681,21 +1718,40 @@ func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, toke
 	if checked == 0 {
 		return PointInspection{}, staleReason("probe_geometry_unverified", "could not verify the reviewed window geometry")
 	}
-	observation := PointInspection{InputBound: bound, Role: C.GoString(&hit.role[0]), WindowVerified: hit.member != 0, NonSensitiveVerified: hit.safe != 0, EditableVerified: hit.editable != 0, PointUnobscured: hit.visible != 0, PointTile: comparePointTile(old.Tiles, now.Tiles, [2]float64{x, y})}
-	if !bound {
-		switch {
-		case observation.Role == "AXGroup" || observation.Role == "AXWebArea":
-			observation.Note = "container_only: the application did not expose a verifiable editable control at this point; do not retry this point"
-		case observation.Role == "":
-			observation.Note = "no_ax_hit: macOS returned no accessible control at this point"
-		case !observation.WindowVerified:
-			observation.Note = "not_verified_for_this_window: the hit could not be proven to belong to the authorized window"
-		case !observation.NonSensitiveVerified:
-			observation.Note = "sensitive_or_unknown: the hit may be a secure or unknown control and is never used for input"
-		case observation.Role == "AXTextField" || observation.Role == "AXTextArea":
-			observation.Note = "text_control_not_editable: a text role was found but it is not settable; verify whether the app exposes another field"
-		default:
-			observation.Note = "no_reviewable_control: the hit is not a supported non-sensitive control"
+	kind := ""
+	if axBound {
+		kind = "ax_control"
+	} else if coordinate {
+		kind = "coordinate"
+	}
+	observation := PointInspection{InputBound: bound, InputKind: kind, Role: role, WindowVerified: hit.member != 0, NonSensitiveVerified: hit.safe != 0, EditableVerified: hit.editable != 0, PointUnobscured: hit.visible != 0, PointTile: comparePointTile(old.Tiles, now.Tiles, [2]float64{x, y})}
+	if coordinate {
+		observation.Note = "coordinate_fallback: no verifiable AX control; graphical click, typing or key input is allowed at this point after the native checks. Verify the visible action context before sending; typed text and key presses cannot be verified by AX."
+	} else if !bound {
+		observation.Note = pointInspectionNote(observation)
+	}
+	if !observation.PointUnobscured {
+		const obscured = "point_obscured: the point is covered or the target is not on the current desktop"
+		if observation.Note == "" {
+			observation.Note = obscured
+		} else {
+			observation.Note += "; " + obscured
+		}
+		if gate != nil && !isOperatorContext(ctx) {
+			// Inspection stays read-only. This only asks the person for the same
+			// layout/focus choice dispatch would request; after that choice the
+			// frame is stale, so the caller must observe again.
+			if bound {
+				c.mu.Lock()
+				c.clearPointReviewLocked()
+				c.mu.Unlock()
+				bound = false
+				observation.InputBound = false
+				observation.InputKind = ""
+			}
+			if err := gate(ctx); err != nil {
+				return PointInspection{}, err
+			}
 		}
 	}
 	return observation, nil
@@ -1809,13 +1865,19 @@ func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, tok
 		if review.control != 0 {
 			defer C.cu_ax_release(review.control)
 		}
-		if json.Unmarshal([]byte(token), &b) != nil || b.Nonce == "" || b.Nonce != review.nonce || review.control == 0 || review.regions == 0 || (len(point) > 0 && point[0] != review.point) {
+		if json.Unmarshal([]byte(token), &b) != nil || b.Nonce == "" || b.Nonce != review.nonce || (review.control == 0 && !review.coordinate) || review.regions == 0 || (len(point) > 0 && point[0] != review.point) {
 			return noInputError(staleReason("control_review_required", "use inspect_point on a fresh frame with the target and relevant context_tiles, or use a verified snapshot ref"))
 		}
 		regions = review.regions
 		native := dispatch
 		dispatch = func(w C.cu_window, pinned C.AXUIElementRef, b macFrameBinding, flag *C.cu_cancel_flag) C.int {
-			flag.reviewed = review.control
+			if review.coordinate {
+				flag.coordinate = 1
+				flag.px = C.double(review.point[0])
+				flag.py = C.double(review.point[1])
+			} else {
+				flag.reviewed = review.control
+			}
 			return native(w, pinned, b, flag)
 		}
 	} else if len(point) > 0 {

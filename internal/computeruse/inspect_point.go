@@ -17,6 +17,7 @@ type PointInspection struct {
 	PointUnobscured      bool   `json:"point_unobscured"`
 	PointTile            string `json:"point_tile"`
 	InputBound           bool   `json:"input_bound"`
+	InputKind            string `json:"input_kind,omitempty"`
 	Note                 string `json:"note,omitempty"`
 }
 

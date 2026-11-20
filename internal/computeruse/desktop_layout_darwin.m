@@ -104,8 +104,12 @@ static GolderDesktopLayout *owner;
     if (![self live]) return;
     NSScreen *screen=host.screen;
     NSRect work=screen.visibleFrame;
+    if (owner && owner!=self) {
+        [self failure:@"另一个会话正在并排操作；本会话保持布局，不会争用窗口。"];
+        return;
+    }
     if (!screen || !host.isOnActiveSpace || host.isMiniaturized || (host.styleMask & NSWindowStyleMaskFullScreen) ||
-        work.size.width<1000 || work.size.height<560 || (owner && owner!=self)) {
+        work.size.width<1000 || work.size.height<560) {
         [self failure:@"当前桌面或屏幕空间不适合并排。保持布局，在菜单栏用 G ⏸ 暂停。"];
         return;
     }

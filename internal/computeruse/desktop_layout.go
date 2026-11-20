@@ -14,6 +14,7 @@ type desktopChoice struct {
 	compact  bool
 	sequence uint64
 	deadline time.Time
+	expired  bool
 }
 
 func (d *desktopChoice) beforeInput(sequence uint64) error {
@@ -42,6 +43,7 @@ func (d *desktopChoice) expire(sequence uint64) bool {
 		return false
 	}
 	d.pending, d.allowed, d.compact = false, true, false
+	d.expired = true
 	return true
 }
 
@@ -58,7 +60,24 @@ func (d *desktopChoice) finish(sequence uint64, compact bool) bool {
 		return false
 	}
 	d.pending, d.allowed, d.compact = false, true, compact
+	d.expired = false
 	return true
+}
+
+// DesktopNotice explains a silent fallback where the UI can still show it.
+func (s *Session) DesktopNotice() string {
+	s.mu.Lock()
+	d := s.desktop
+	s.mu.Unlock()
+	if d == nil {
+		return ""
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.expired {
+		return "布局选择超时，已保持原布局；按住 Option 可重新选择。Layout choice timed out; the original layout was kept. Hold Option to choose again."
+	}
+	return ""
 }
 
 // CompactDesktop is a presentation hint, not a control capability.
