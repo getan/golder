@@ -17,7 +17,7 @@ type probeFixture struct {
 
 func (b *probeFixture) InspectPoint(_ context.Context, _ Target, _ string, x, y float64) (PointInspection, error) {
 	b.probes++
-	return PointInspection{WindowVerified: true, Role: "AXGroup"}, nil
+	return PointInspection{WindowVerified: true, Role: "AXGroup", PointVerification: "unverified"}, nil
 }
 
 func TestInspectPointIsObservationNotControl(t *testing.T) {

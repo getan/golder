@@ -15,6 +15,7 @@ type PointInspection struct {
 	NonSensitiveVerified bool   `json:"non_sensitive_verified"`
 	EditableVerified     bool   `json:"editable_verified"`
 	PointUnobscured      bool   `json:"point_unobscured"`
+	PointVerification    string `json:"point_verification,omitempty"`
 	PointTile            string `json:"point_tile"`
 	InputBound           bool   `json:"input_bound"`
 	InputKind            string `json:"input_kind,omitempty"`

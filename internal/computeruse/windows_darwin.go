@@ -199,11 +199,14 @@ typedef struct {
 } cu_ax_diagnostic;
 
 enum { CU_INPUT_UNVERIFIED, CU_INPUT_OCCLUDED, CU_INPUT_AX_HIT, CU_INPUT_GEOMETRY };
+// Point verification outcomes, ordered from fully verified to unverifiable.
+enum { CU_POINT_OK = 0, CU_POINT_TARGET_NOT_LISTED, CU_POINT_FOREIGN_HIT, CU_POINT_UNVERIFIABLE };
 // Only the synchronous native dispatcher writes refusal; cancellation touches
 // only the atomic flag, and Go reads refusal after the dispatcher returns.
 typedef struct {
 	atomic_int cancelled;
 	int refusal;
+	int point;
 	AXUIElementRef reviewed;
 	int coordinate;
 	double px, py;
@@ -624,32 +627,98 @@ static int cu_current_bounds(cu_window selected, CGRect *bounds) {
 	return ok;
 }
 
-// Every window above the target must be known not to cover the requested point.
-static int cu_point_unobscured(cu_window selected, CGPoint point, cu_cancel_flag *flag) {
+// Read-only hit test: AXUIElementCopyElementAtPosition resolves which window
+// would actually receive the event at this point. It never injects an event.
+// A same-pid hit is not enough: the top-level window must be the pinned one,
+// otherwise another window of the same application would receive the input.
+static int cu_point_hits_target(cu_window selected, AXUIElementRef expected, CGPoint point, cu_cancel_flag *flag) {
+	AXUIElementRef system = AXUIElementCreateSystemWide();
+	AXUIElementRef hit = NULL;
+	AXError rc = system ? AXUIElementCopyElementAtPosition(system, point.x, point.y, &hit) : kAXErrorCannotComplete;
+	int result = CU_POINT_UNVERIFIABLE;
+	if (rc == kAXErrorSuccess && hit) {
+		pid_t pid = 0;
+		if (AXUIElementGetPid(hit, &pid) != kAXErrorSuccess) result = CU_POINT_UNVERIFIABLE;
+		else if (pid != selected.pid) result = CU_POINT_FOREIGN_HIT;
+		else if (!expected) result = CU_POINT_OK;
+		else {
+			CFTypeRef top = NULL;
+			if (AXUIElementCopyAttributeValue(hit, kAXTopLevelUIElementAttribute, &top) == kAXErrorSuccess && top &&
+				CFGetTypeID(top) == AXUIElementGetTypeID()) {
+				result = CFEqual((AXUIElementRef)top, expected) ? CU_POINT_OK : CU_POINT_FOREIGN_HIT;
+			} else {
+				result = CU_POINT_UNVERIFIABLE;
+			}
+			if (top) CFRelease(top);
+		}
+	}
+	if (hit) CFRelease(hit);
+	if (system) CFRelease(system);
+	if (cu_cancelled(flag)) return CU_POINT_UNVERIFIABLE;
+	return result;
+}
+
+// Pure classification so the decision table is testable without real windows.
+static int cu_point_classify(int found, int metadata, int overlap, int hit) {
+	if (!found) return CU_POINT_TARGET_NOT_LISTED;
+	if (metadata) return CU_POINT_UNVERIFIABLE;
+	if (!overlap) return CU_POINT_OK;
+	return hit;
+}
+
+// Rect overlap with a higher window is a lead, not proof of occlusion: a
+// window-level alpha and bounds say nothing about per-pixel transparency, and
+// input-transparent overlays (screen overlays, security agents) are common.
+// Classify into: target not visible, overlapping windows, foreign hit, or an
+// unresolvable point. Only a proven same-pid hit verifies input reaches it.
+static int cu_point_unobscured(cu_window selected, AXUIElementRef expected, CGPoint point, cu_cancel_flag *flag) {
+	flag->point = CU_POINT_OK;
 	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
-	if (!list) return 0;
-	int found = 0, clear = 1, overlap = 0;
+	if (!list) { flag->point = CU_POINT_UNVERIFIABLE; return 0; }
+	int found = 0, overlap = 0, metadata = 0;
 	for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
 		CFDictionaryRef item = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
 		uint32_t number = 0;
 		int32_t layer = 0;
 		CFNumberRef n = (CFNumberRef)CFDictionaryGetValue(item, kCGWindowNumber);
 		CFNumberRef l = (CFNumberRef)CFDictionaryGetValue(item, kCGWindowLayer);
-		if (!n || !l || !CFNumberGetValue(n, kCFNumberSInt32Type, &number) || !CFNumberGetValue(l, kCFNumberSInt32Type, &layer)) { clear = 0; break; }
+		if (!n || !l || !CFNumberGetValue(n, kCFNumberSInt32Type, &number) || !CFNumberGetValue(l, kCFNumberSInt32Type, &layer)) { metadata = 1; break; }
 		if (number == selected.window_id) { found = 1; break; }
 		if (layer < 0) continue;
 		CGRect bounds;
 		CFDictionaryRef raw = (CFDictionaryRef)CFDictionaryGetValue(item, kCGWindowBounds);
-		if (!raw || !CGRectMakeWithDictionaryRepresentation(raw, &bounds)) { clear = 0; break; }
+		if (!raw || !CGRectMakeWithDictionaryRepresentation(raw, &bounds)) { metadata = 1; break; }
 		double alpha = 1;
 		CFNumberRef a = (CFNumberRef)CFDictionaryGetValue(item, kCGWindowAlpha);
-		if ((a && !CFNumberGetValue(a, kCFNumberDoubleType, &alpha)) || !isfinite(alpha) || alpha < 0 || alpha > 1) { clear = 0; break; }
-		if (alpha > 0 && CGRectContainsPoint(bounds, point)) { clear = 0; overlap = 1; }
+		if ((a && !CFNumberGetValue(a, kCFNumberDoubleType, &alpha)) || !isfinite(alpha) || alpha < 0 || alpha > 1) { metadata = 1; break; }
+		if (alpha > 0 && CGRectContainsPoint(bounds, point)) overlap = 1;
 	}
 	CFRelease(list);
-	if (found && overlap) flag->refusal = CU_INPUT_OCCLUDED;
-	return found && clear;
+	// Overlap alone proves nothing; resolve it with a read-only hit test.
+	int hit = overlap ? cu_point_hits_target(selected, expected, point, flag) : CU_POINT_OK;
+	int verdict = cu_point_classify(found, metadata, overlap, hit);
+	flag->point = verdict;
+	if (verdict != CU_POINT_OK) { flag->refusal = CU_INPUT_OCCLUDED; return 0; }
+	return 1;
 }
+
+// Stable labels for Go. Order mirrors the CU_POINT_* enum.
+static const char *cu_point_verdict_name(int verdict) {
+	switch (verdict) {
+		case CU_POINT_TARGET_NOT_LISTED: return "target_not_visible";
+		case CU_POINT_FOREIGN_HIT: return "foreign_hit";
+		case CU_POINT_UNVERIFIABLE: return "unverified";
+		default: return "verified";
+	}
+}
+
+// Exposes the pure decision table to Go tests without real windows.
+int cu_point_classify_test(int found, int metadata, int overlap, int hit, const char **out) {
+	if (!out) return -1;
+	*out = cu_point_verdict_name(cu_point_classify(found, metadata, overlap, hit));
+	return 0;
+}
+
 
 // A container hit is ambiguous: it may hide a protected descendant that the
 // target application did not expose. Never inject into an ambiguous container.
@@ -700,7 +769,7 @@ static int cu_frame_bounds_match(cu_window selected, double x, double y, double 
 	return 0;
 }
 
-typedef struct { int member, safe, editable, visible, tiles; char role[32]; AXUIElementRef control; } cu_probe;
+typedef struct { int member, safe, editable, visible, tiles, verdict; char role[32]; AXUIElementRef control; } cu_probe;
 
 // 4x4 tiles, row-major. A reviewed control can span several tiles; region
 // comparison must cover every one of them rather than trusting a model mask.
@@ -760,7 +829,8 @@ static AXUIElementRef cu_ax_find_control_at_point(AXUIElementRef element, CGPoin
 static int cu_probe_point(cu_window selected, AXUIElementRef expected, CGRect bounds, CGPoint p, cu_cancel_flag *flag, cu_probe *out) {
 	CGRect current;
 	if (!expected || !cu_current_bounds(selected, &current) || !CGRectEqualToRect(current, bounds)) return 0;
-	out->visible = cu_point_unobscured(selected,p,flag);
+	out->visible = cu_point_unobscured(selected, expected, p, flag);
+	out->verdict = flag->point;
 	AXUIElementRef app = AXUIElementCreateApplication(selected.pid), hit = NULL;
 	if (!app) return 1;
 	AXUIElementSetMessagingTimeout(app, 0.3);
@@ -837,7 +907,7 @@ static int cu_frame_point_safe(cu_window selected, AXUIElementRef expected, doub
 	// Two AX hit checks, each followed by fresh geometry, stacking and focus
 	// checks. The last pass verifies the pinned window just before posting.
 	for (int pass = 0; pass < 3; pass++) {
-		if (cu_cancelled(flag) || !cu_frame_bounds_match(selected, bx, by, bw, bh, flag) || !cu_point_unobscured(selected, point, flag)) return 0;
+		if (cu_cancelled(flag) || !cu_frame_bounds_match(selected, bx, by, bw, bh, flag) || !cu_point_unobscured(selected, expected, point, flag)) return 0;
 		AXUIElementRef window = cu_ax_window(selected, 1, flag);
 		if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 		int ok = operator || flag->coordinate || cu_point_ax_safe(window, point, flag);
@@ -900,7 +970,7 @@ static int cu_focused_control_safe(cu_window selected, AXUIElementRef window, cu
 	if (ok) {
 		point.x += dimensions.width / 2;
 		point.y += dimensions.height / 2;
-		ok = cu_point_unobscured(selected, point, flag);
+		ok = cu_point_unobscured(selected, NULL, point, flag);
 	}
 	if (position) CFRelease(position);
 	if (size) CFRelease(size);
@@ -916,12 +986,12 @@ static int cu_press_frame(cu_window selected, AXUIElementRef expected, double bx
 	AXUIElementRef window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	CGPoint reviewedPoint = CGPointMake(bx + flag->px*bw, by + flag->py*bh);
-	int ok = flag->coordinate ? cu_point_unobscured(selected, reviewedPoint, flag) : cu_focused_control_safe(selected, window, flag);
+	int ok = flag->coordinate ? cu_point_unobscured(selected, expected, reviewedPoint, flag) : cu_focused_control_safe(selected, window, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag)) return 0;
 	window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
-	ok = flag->coordinate ? cu_point_unobscured(selected, reviewedPoint, flag) : cu_focused_control_safe(selected, window, flag);
+	ok = flag->coordinate ? cu_point_unobscured(selected, expected, reviewedPoint, flag) : cu_focused_control_safe(selected, window, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
 	CGEventRef down = CGEventCreateKeyboardEvent(NULL, code, true);
@@ -947,7 +1017,7 @@ static AXUIElementRef cu_text_frame_control(cu_window selected, AXUIElementRef e
 		// still requires this exact focused window and the reviewed point to stay
 		// unobscured; typed text itself cannot be verified by AX.
 		CGPoint point = CGPointMake(bounds.origin.x + flag->px*bounds.size.width, bounds.origin.y + flag->py*bounds.size.height);
-		if (!cu_point_unobscured(selected, point, flag)) { CFRelease(window); return NULL; }
+		if (!cu_point_unobscured(selected, expected, point, flag)) { CFRelease(window); return NULL; }
 		return window;
 	}
 	// A person can type into their chosen opaque canvas. This path is not
@@ -1724,18 +1794,22 @@ func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, toke
 	} else if coordinate {
 		kind = "coordinate"
 	}
-	observation := PointInspection{InputBound: bound, InputKind: kind, Role: role, WindowVerified: hit.member != 0, NonSensitiveVerified: hit.safe != 0, EditableVerified: hit.editable != 0, PointUnobscured: hit.visible != 0, PointTile: comparePointTile(old.Tiles, now.Tiles, [2]float64{x, y})}
+	verification := C.GoString(C.cu_point_verdict_name(hit.verdict))
+	observation := PointInspection{InputBound: bound, InputKind: kind, Role: role, WindowVerified: hit.member != 0, NonSensitiveVerified: hit.safe != 0, EditableVerified: hit.editable != 0, PointUnobscured: hit.visible != 0, PointVerification: verification, PointTile: comparePointTile(old.Tiles, now.Tiles, [2]float64{x, y})}
 	if coordinate {
 		observation.Note = "coordinate_fallback: no verifiable AX control; graphical click, typing or key input is allowed at this point after the native checks. Verify the visible action context before sending; typed text and key presses cannot be verified by AX."
 	} else if !bound {
 		observation.Note = pointInspectionNote(observation)
 	}
 	if !observation.PointUnobscured {
-		const obscured = "point_obscured: the point is covered or the target is not on the current desktop"
+		const obscured = "point_not_verified: the point could not be verified to reach the authorized window"
 		if observation.Note == "" {
 			observation.Note = obscured
 		} else {
 			observation.Note += "; " + obscured
+		}
+		if observation.PointVerification == "" {
+			observation.PointVerification = "unverified"
 		}
 		if gate != nil && !isOperatorContext(ctx) {
 			// Inspection stays read-only. This only asks the person for the same
@@ -1919,6 +1993,7 @@ func (c *MacWindowCatalog) sendFrame(ctx context.Context, target Target, binding
 	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
 	sent := dispatch(window, c.pinned[target.ID], binding, flag)
 	refusal := flag.refusal
+	verdict := C.GoString(C.cu_point_verdict_name(flag.point))
 	if !stop() {
 		<-done
 	}
@@ -1936,7 +2011,7 @@ func (c *MacWindowCatalog) sendFrame(ctx context.Context, target Target, binding
 		check := func() error { return c.Validate(ctx, target, false) }
 		switch refusal {
 		case C.CU_INPUT_OCCLUDED:
-			return inputRefused(ctx, check, staleReason("point_occluded", "the reviewed point is covered"))
+			return inputRefused(ctx, check, staleReason("point_not_verified", "the reviewed point could not be verified to reach the authorized window ("+verdict+"); no input was sent"))
 		case C.CU_INPUT_AX_HIT:
 			return inputRefused(ctx, check, staleReason("ax_hit_unverified", "could not verify a safe direct AX control at the point"))
 		case C.CU_INPUT_GEOMETRY:
