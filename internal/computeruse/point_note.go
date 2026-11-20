@@ -22,6 +22,12 @@ func pointInspectionNote(observation PointInspection) string {
 	}
 }
 
+// A reviewed AX control is not actionable until the point is also verified
+// unobscured; dispatch repeats these checks immediately before input.
+func axControlEligible(checked, visible, control, nonce, same bool, required uint16) bool {
+	return checked && visible && control && nonce && required != 0 && same
+}
+
 // Coordinate fallback is allowed only for a point that is still inside the
 // verified, non-sensitive target window and still unobscured. A foreign or
 // sensitive hit never qualifies, even when the container itself is visible.

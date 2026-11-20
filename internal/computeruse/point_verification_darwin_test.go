@@ -41,6 +41,7 @@ func TestPointClassifySplit(t *testing.T) {
 		{"unresolvable overlay is explicit", yes, no, yes, unkn, "unverified"},
 		{"target missing from visible list", no, no, no, ok, "target_not_visible"},
 		{"inventory metadata unreadable", yes, yes, no, ok, "unverified"},
+		{"inventory interrupted before target", no, yes, no, ok, "unverified"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := macPointClassify(t, tc.found, tc.metadata, tc.overlap, tc.hit); got != tc.want {

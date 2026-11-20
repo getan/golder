@@ -27,6 +27,18 @@ func TestPointInspectionNoteDistinguishesFailures(t *testing.T) {
 	}
 }
 
+func TestAXControlEligibility(t *testing.T) {
+	if !axControlEligible(true, true, true, true, true, 1) {
+		t.Fatal("verified control should be eligible")
+	}
+	if axControlEligible(true, false, true, true, true, 1) {
+		t.Fatal("unverified point must not bind a control")
+	}
+	if axControlEligible(true, true, true, true, false, 1) {
+		t.Fatal("changed region must not bind a control")
+	}
+}
+
 func TestCoordinateFallbackEligibility(t *testing.T) {
 	cases := []struct {
 		name                               string

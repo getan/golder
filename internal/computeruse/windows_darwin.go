@@ -660,8 +660,8 @@ static int cu_point_hits_target(cu_window selected, AXUIElementRef expected, CGP
 
 // Pure classification so the decision table is testable without real windows.
 static int cu_point_classify(int found, int metadata, int overlap, int hit) {
-	if (!found) return CU_POINT_TARGET_NOT_LISTED;
 	if (metadata) return CU_POINT_UNVERIFIABLE;
+	if (!found) return CU_POINT_TARGET_NOT_LISTED;
 	if (!overlap) return CU_POINT_OK;
 	return hit;
 }
@@ -1769,7 +1769,7 @@ func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, toke
 	regions := required | mask
 	role := C.GoString(&hit.role[0])
 	same := sameRegions(old.Tiles, now.Tiles, regions)
-	axBound := checked != 0 && ctx.Err() == nil && hit.control != 0 && old.Nonce != "" && required != 0 && same
+	axBound := ctx.Err() == nil && axControlEligible(checked != 0, hit.visible != 0, hit.control != 0, old.Nonce != "", same, required)
 	coordinate := checked != 0 && ctx.Err() == nil && hit.control == 0 &&
 		coordinateFallbackEligible(checked != 0, role, hit.member != 0, hit.safe != 0, hit.visible != 0, old.Nonce != "", required, same)
 	bound := axBound || coordinate
