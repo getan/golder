@@ -41,6 +41,8 @@ func computerControlError(session *computeruse.Session, err error) agentcore.Age
 			message += "; stop: the pinned window identity could not be verified. Only the operator can resume or select a target"
 		} else if errors.Is(err, computeruse.ErrClosePending) {
 			details["recovery"] = "inspect_window"
+		} else if details["reason"] == "desktop_layout_choice" {
+			details["recovery"] = "await_operator_layout"
 		} else if !session.Status().Paused && errors.Is(err, computeruse.ErrStaleObservation) {
 			details["recovery"] = "inspect_and_retarget"
 			message += "; no input was sent. Inspect the selected window with a fresh snapshot or screenshot and independently choose a new target; no manual resume is needed"

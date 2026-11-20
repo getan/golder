@@ -20,6 +20,8 @@ int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *lengt
 int cu_app_allowed(int32_t pid);
 int cu_running_bundle(int32_t pid, char *out, size_t length);
 int cu_activate_running_app(int32_t pid, const char *expectedPath);
+typedef int (*cu_layout_check)(const void *,AXUIElementRef,int);
+void cu_layout_attach(uintptr_t host, uintptr_t key, AXUIElementRef pinned, const void *identity, size_t length, cu_layout_check check);
 
 typedef struct {
 	uint32_t window_id;
@@ -562,6 +564,24 @@ static int cu_focus_selected(cu_window selected, AXUIElementRef expected, cu_can
 	return !cu_cancelled(flag); // actual focus is checked separately before input
 }
 
+// Called on the exact retained AX window, never on the frontmost app. Mode 2
+// is exclusively a person's explicit one-time presentation from fullscreen.
+static int cu_layout_identity(const void *raw, AXUIElementRef expected, int mode) {
+	cu_window w = *(const cu_window *)raw;
+	if (!cu_window_exists(w.window_id,w.pid,w.start_sec,w.start_usec)) return 0;
+	cu_cancel_flag flag = {0};
+	AXUIElementRef current = cu_ax_window(w,0,&flag);
+	int same = current && expected && CFEqual(current,expected);
+	if (current) CFRelease(current);
+	if (!same) return 0;
+	if (mode == 2) return cu_focus_selected(w,expected,&flag,1);
+	return cu_window_visible_here(w);
+}
+
+static void cu_begin_layout(uintptr_t host, uintptr_t key, AXUIElementRef pinned, cu_window w) {
+	cu_layout_attach(host,key,pinned,&w,sizeof(w),cu_layout_identity);
+}
+
 static int cu_ax_contains(AXUIElementRef element, AXUIElementRef wanted, int depth, int *budget, cu_cancel_flag *flag) {
 	if (!element || depth > 16 || *budget <= 0 || cu_cancelled(flag)) return 0;
 	(*budget)--;
@@ -994,6 +1014,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/cgo"
 	"strings"
 	"sync"
 	"time"
@@ -1012,12 +1033,40 @@ type MacWindowCatalog struct {
 	snapshotID   string
 	snapshotFor  string
 	snapshotHint string
+	layoutGate func(context.Context) error
 	reviewed macPointReview // at most one retained control per catalog, never exposed to the model
 	closed       bool
 }
 
 func NewMacWindowCatalog() *MacWindowCatalog {
 	return &MacWindowCatalog{windows: make(map[string]C.cu_window), pinned: make(map[string]C.AXUIElementRef)}
+}
+
+// EnableDesktopLayout is called only by the GUI after attaching the local
+// control grant. Installing it does not present, move or activate any window.
+func (s *Session) EnableDesktopLayout(host uintptr) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.backend.(*MacWindowCatalog)
+	if !ok || host == 0 || s.desktop != nil || !s.status.Active || !s.status.Capabilities.Control {
+		return
+	}
+	id := s.status.Target.ID
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	w, ok := c.windows[id]
+	if !ok || c.pinned[id] == 0 || c.closed { return }
+	d := &desktopChoice{}
+	s.desktop = d
+	c.layoutGate = func(ctx context.Context) error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := ctx.Err(); err != nil { return err }
+		if !s.status.Active || s.status.Paused || s.status.Target.ID != id { return ErrPaused }
+		return d.beforeInput(s.sequence)
+	}
+	h := cgo.NewHandle(layoutGrant{s:s, choice:d, target:id})
+	C.cu_begin_layout(C.uintptr_t(host), C.uintptr_t(h), c.pinned[id], w)
 }
 
 // Targets is called by local target resolution, never by a model-facing list
@@ -1653,6 +1702,14 @@ func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, tok
 		_, current, err := c.CaptureBound(ctx, target)
 		return current, err
 	}, func() (bool, error) {
+		c.mu.Lock()
+		gate := c.layoutGate
+		c.mu.Unlock()
+		if gate != nil && !isOperatorContext(ctx) {
+			if err := gate(ctx); err != nil {
+				return false, err
+			}
+		}
 		return prepareInputFocus(ctx, 2*time.Second, 100*time.Millisecond,
 			func() (bool, error) { return c.selectedFocus(ctx, target) },
 			func() error { return c.focusSelected(ctx, target) })

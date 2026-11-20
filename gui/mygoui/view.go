@@ -93,6 +93,22 @@ func (a *App) view(c *ui.Context) {
 	}
 
 	c.Root().Background(t.Background)
+	if s := a.computerSession; s != nil && s.CompactDesktop() && !s.Status().OperatorControl {
+		ui.Column(c).Fill().Padding(10).Gap(8).Children(func() {
+			status := s.Status()
+			ui.Text(c, "Computer Use · "+status.Target.Application).Bold().Wrap()
+			if status.Paused {
+				ui.Text(c, "已暂停 / Paused")
+				if subtleButton(c, "交还 Agent / Resume").Clicked() { a.resumeComputer() }
+			} else {
+				ui.Text(c, "前台操作 / Foreground control")
+				if subtleButton(c, "暂停 / Pause").Clicked() { s.Pause() }
+			}
+			if subtleButton(c, "接管 / Take over", a.status.Permission == "read-only").Clicked() { a.takeOverComputer() }
+			if subtleButton(c, "停止并恢复布局 / Stop").Clicked() { a.stopComputer() }
+		})
+		return
+	}
 	ui.Column(c).Fill().Children(func() {
 		a.titleBar(c)
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {

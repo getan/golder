@@ -70,6 +70,7 @@ type Session struct {
 	mu                      sync.Mutex
 	opMu                    operationLock
 	backend                 Backend
+	desktop                 *desktopChoice
 	status                  Status
 	cancel                  context.CancelFunc
 	previewCancel           context.CancelFunc
@@ -440,6 +441,7 @@ func (s *Session) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.desktop = nil
 	s.status = Status{}
 }
 
