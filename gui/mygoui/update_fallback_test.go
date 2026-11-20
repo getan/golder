@@ -16,12 +16,13 @@ func TestGUIReleaseFallbackDoesNotBypassPackageVerification(t *testing.T) {
 	for _, tc := range []struct {
 		name, siteBody, wantTag, wantErr string
 		cached                           bool
+		wantCalls                        int
 	}{
-		{"current", `{"tag":"v1.2.3"}`, "v1.2.3", "", true},
-		{"older", `{"tag_name":"v1.2.2"}`, "v1.2.2", "", true},
-		{"newer", `{"tag":"v1.2.4"}`, "", "verified package metadata is unavailable", false},
-		{"invalid", `{"tag":"v1.2.3/../../bad"}`, "", "rate limit exceeded", false},
-		{"malformed", `{`, "", "rate limit exceeded", false},
+		{"current", `{"tag":"v1.2.3"}`, "v1.2.3", "", true, 3},
+		{"older", `{"tag_name":"v1.2.2"}`, "v1.2.2", "", true, 3},
+		{"newer", `{"tag":"v1.2.4"}`, "", "verified package metadata is unavailable", false, 3},
+		{"invalid", `{"tag":"v1.2.3/../../bad"}`, "", "rate limit exceeded", false, 3},
+		{"malformed", `{`, "", "rate limit exceeded", false, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls []string
@@ -45,8 +46,8 @@ func TestGUIReleaseFallbackDoesNotBypassPackageVerification(t *testing.T) {
 			if cached != tc.cached || release.Tag != tc.wantTag || (tc.wantErr == "" && err != nil) || (tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr))) {
 				t.Fatalf("release=%+v cached=%t err=%v", release, cached, err)
 			}
-			if strings.Join(calls, ",") != "golder-cli.pages.dev,api.github.com,golder-cli.pages.dev" {
-				t.Fatalf("unexpected requests: %v", calls)
+			if len(calls) != tc.wantCalls {
+				t.Fatalf("requests = %v, want %d", calls, tc.wantCalls)
 			}
 			if cached && len(release.Assets) != 0 {
 				t.Fatalf("cached tag produced installable assets: %+v", release)
@@ -73,7 +74,7 @@ func TestGUIReleaseFallbackNotUsedOnSuccessOrCancellation(t *testing.T) {
 				cancel()
 			}
 			_, cached, _ := fetchGUIReleaseWithFallback(ctx, client, "v1.2.3")
-			if (calls != 1 && !(cancelled && calls == 0)) || cached {
+			if (calls != 2 && !(cancelled && calls == 0)) || cached {
 				t.Fatalf("calls=%d cached=%t", calls, cached)
 			}
 		})
@@ -89,7 +90,7 @@ func TestGUIReleaseSiteMetadataAndFallback(t *testing.T) {
 		name, digest string
 		wantCalls    int
 	}{
-		{"valid", "sha256:" + strings.Repeat("a", 64), 1},
+		{"valid", "sha256:" + strings.Repeat("a", 64), 2},
 		{"invalid digest", "sha256:bad", 2},
 		{"missing digest", "", 2},
 	} {
@@ -107,12 +108,35 @@ func TestGUIReleaseSiteMetadataAndFallback(t *testing.T) {
 			if err != nil || calls != tc.wantCalls {
 				t.Fatalf("calls=%d release=%+v err=%v", calls, release, err)
 			}
-			if calls == 1 {
+			if release.Tag == "v1.2.4" {
 				if _, ok, err := guiReleaseDownload(release, "v1.2.3", runtime.GOOS, runtime.GOARCH); err != nil || !ok {
 					t.Fatalf("site package rejected: %v", err)
 				}
 			}
 		})
+	}
+}
+
+func TestGUIReleasePrefersNewerGitHubOverSite(t *testing.T) {
+	name := guiAssetName("v1.2.5", runtime.GOOS, runtime.GOARCH)
+	if name == "" {
+		t.Skip("unsupported platform")
+	}
+	calls := 0
+	client := &http.Client{Transport: guiRoundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		body := `{"tag":"v1.2.4"}`
+		if r.URL.Host == "api.github.com" {
+			body = fmt.Sprintf(`{"tag_name":"v1.2.5","assets":[{"name":%q,"state":"uploaded","size":10,"digest":"sha256:%s"}]}`, name, strings.Repeat("b", 64))
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+	})}
+	release, cached, err := fetchGUIReleaseWithFallback(context.Background(), client, "v1.2.3")
+	if err != nil || cached || release.Tag != "v1.2.5" || calls != 2 {
+		t.Fatalf("release=%+v cached=%t calls=%d err=%v", release, cached, calls, err)
+	}
+	if _, ok, err := guiReleaseDownload(release, "v1.2.3", runtime.GOOS, runtime.GOARCH); err != nil || !ok {
+		t.Fatalf("newer GitHub package not installable: %v", err)
 	}
 }
 

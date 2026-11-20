@@ -143,12 +143,20 @@ func fetchGUIRelease(ctx context.Context, client *http.Client) (guiRelease, erro
 	return release, err
 }
 
-// Prefer the site's cached GitHub metadata. An older site deployment, missing
-// platform asset, or invalid metadata falls back to GitHub and the legacy
-// tag-only endpoint; neither can bypass package validation.
+// Query both the site's cached GitHub metadata and GitHub itself, and prefer
+// the newer release that has a verifiable package. A site-only early return
+// would make a user several versions behind install one intermediate release
+// per check while the edge cache catches up. If GitHub is unreachable, the
+// site's answer still stands; neither source can bypass package validation.
 func fetchGUIReleaseWithFallback(ctx context.Context, client *http.Client, current string) (guiRelease, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return guiRelease{}, false, err
+	}
 	siteCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	req, siteErr := http.NewRequestWithContext(siteCtx, http.MethodGet, "https://golder-cli.pages.dev/api/gui-release", nil)
+	var ghRelease guiRelease
+	var ghErr error
+	ghTried := false
 	if siteErr == nil {
 		var resp *http.Response
 		resp, siteErr = client.Do(req)
@@ -163,12 +171,34 @@ func fetchGUIReleaseWithFallback(ctx context.Context, client *http.Client, curre
 			resp.Body.Close()
 			if siteErr == nil {
 				available, comparable := selfupdate.UpdateAvailable(current, siteRelease.Tag)
-				if comparable && guiAssetName(siteRelease.Tag, "darwin", "arm64") != "" {
-					_, hasPackage, packageErr := guiReleaseDownload(siteRelease, current, runtime.GOOS, runtime.GOARCH)
-					if !available || (hasPackage && packageErr == nil) {
+				siteAsset := guiAssetName(siteRelease.Tag, "darwin", "arm64") != ""
+				_, hasPackage, packageErr := guiReleaseDownload(siteRelease, current, runtime.GOOS, runtime.GOARCH)
+				siteUsable := comparable && siteAsset && (!available || (hasPackage && packageErr == nil))
+
+				// Always cross-check GitHub; the edge cache can lag several
+				// releases behind, and the site's tag may itself be newer.
+				ghRelease, ghErr = fetchGUIRelease(ctx, client)
+				ghTried = true
+				if ghErr == nil {
+					if guiReleaseIsNewer(siteRelease, ghRelease) {
+						if _, usable, err := guiReleaseDownload(ghRelease, current, runtime.GOOS, runtime.GOARCH); err == nil && usable {
+							cancel()
+							return ghRelease, false, nil
+						}
+					}
+					if siteUsable {
 						cancel()
 						return siteRelease, stale && !available, nil
 					}
+					if _, usable, err := guiReleaseDownload(ghRelease, current, runtime.GOOS, runtime.GOARCH); err == nil && usable {
+						cancel()
+						return ghRelease, false, nil
+					}
+					cancel()
+					return ghRelease, false, nil
+				} else if siteUsable {
+					cancel()
+					return siteRelease, stale && !available, nil
 				}
 			}
 		}
@@ -177,9 +207,15 @@ func fetchGUIReleaseWithFallback(ctx context.Context, client *http.Client, curre
 	if ctx.Err() != nil {
 		return guiRelease{}, false, ctx.Err()
 	}
-	release, err := fetchGUIRelease(ctx, client)
-	if err == nil || ctx.Err() != nil {
-		return release, false, err
+	if !ghTried {
+		ghRelease, ghErr = fetchGUIRelease(ctx, client)
+		if ghErr == nil || ctx.Err() != nil {
+			return ghRelease, false, ghErr
+		}
+	}
+	err := ghErr
+	if err == nil {
+		err = fmt.Errorf("verified package metadata is unavailable")
 	}
 	req, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, selfupdate.SiteLatestURL, nil)
 	if requestErr != nil {
@@ -209,6 +245,14 @@ func fetchGUIReleaseWithFallback(ctx context.Context, client *http.Client, curre
 		return guiRelease{}, false, fmt.Errorf("cached release %s is newer, but verified package metadata is unavailable: %w", tag, err)
 	}
 	return guiRelease{Tag: tag}, true, nil
+}
+
+func guiReleaseIsNewer(base, candidate guiRelease) bool {
+	if strings.TrimSpace(base.Tag) == "" || strings.TrimSpace(candidate.Tag) == "" {
+		return false
+	}
+	available, comparable := selfupdate.UpdateAvailable(base.Tag, candidate.Tag)
+	return comparable && available
 }
 
 func (a *App) checkGUIUpdate(manual bool) {

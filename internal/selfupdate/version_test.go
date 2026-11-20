@@ -70,7 +70,7 @@ func TestParseVersion(t *testing.T) {
 	}
 }
 
-func TestLatestTagSiteFirst(t *testing.T) {
+func TestLatestTagUsesNewerSource(t *testing.T) {
 	var githubHits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/latest" {
@@ -92,17 +92,39 @@ func TestLatestTagSiteFirst(t *testing.T) {
 	client := srv.Client()
 	client.Transport = rewriteHost{base: srv.URL, rt: client.Transport}
 
-	// current is older than the site's tag, so the site's answer is already an
-	// upgrade and the cross-check is skipped: the common path stays one request.
+	// The site says v0.4.0, but GitHub has v9.9.9. A one-step update must take
+	// the newer source even though the site's answer is already an upgrade.
 	tag, err := LatestTag(context.Background(), client, "getan/golder", "v0.3.0")
 	if err != nil {
 		t.Fatalf("LatestTag: %v", err)
 	}
-	if tag != "v0.4.0" {
-		t.Errorf("tag = %q, want v0.4.0 (from site endpoint)", tag)
+	if tag != "v9.9.9" {
+		t.Errorf("tag = %q, want v9.9.9 (the newer of site and GitHub)", tag)
 	}
-	if githubHits != 0 {
-		t.Errorf("the site reported an upgrade, so GitHub must not be called (called %d times)", githubHits)
+	if githubHits != 1 {
+		t.Errorf("GitHub cross-check hits = %d, want exactly 1", githubHits)
+	}
+}
+
+func TestLatestTagKeepsNewerSiteTag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/latest" {
+			_, _ = w.Write([]byte(`{"tag":"v0.5.0"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"tag_name":"v0.4.1"}`))
+	}))
+	defer srv.Close()
+
+	client := srv.Client()
+	client.Transport = rewriteHost{base: srv.URL, rt: client.Transport}
+
+	tag, err := LatestTag(context.Background(), client, "getan/golder", "v0.4.0")
+	if err != nil {
+		t.Fatalf("LatestTag: %v", err)
+	}
+	if tag != "v0.5.0" {
+		t.Errorf("tag = %q, want the site's newer v0.5.0", tag)
 	}
 }
 
