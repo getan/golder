@@ -31,9 +31,17 @@ type Element struct {
 }
 
 type Snapshot struct {
-	ID        string    `json:"id"`
-	Elements  []Element `json:"elements"`
-	Truncated bool      `json:"truncated,omitempty"`
+	ID        string        `json:"id"`
+	Elements  []Element     `json:"elements"`
+	Truncated bool          `json:"truncated,omitempty"`
+	AX        *AXTreeStatus `json:"ax,omitempty"`
+}
+
+// Describes only what was observed in this bounded snapshot. A successful AX
+// hint does not imply a complete tree, a send button, or permission to type.
+type AXTreeStatus struct {
+	ManualAccessibility string `json:"manual_accessibility"`
+	EditableObserved    bool   `json:"enabled_nonsecure_editable_observed"`
 }
 
 // BoundedSnapshot sanitizes platform-provided content before it can be sent to

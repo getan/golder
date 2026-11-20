@@ -29,15 +29,22 @@ func (*ComputerTool) Description() string {
 func computerControlError(session *computeruse.Session, err error) agentcore.AgentToolResult {
 	message := fmt.Sprintf("computer: %v", err)
 	details := map[string]any{"execution_state": "unknown"}
+	if code := computeruse.StaleCode(err); code != "" {
+		details["reason"] = code
+	}
 	if errors.Is(err, computeruse.ErrPaused) {
 		details["execution_state"] = "not_dispatched"
 	} else if errors.Is(err, computeruse.ErrNoInput) {
 		details["execution_state"] = "not_dispatched"
-		if errors.Is(err, computeruse.ErrClosePending) {
+		if errors.Is(err, computeruse.ErrTargetLost) {
+			details["reason"], details["recovery"] = "target_lost", "operator_required"
+			message += "; stop: the pinned window identity could not be verified. Only the operator can resume or select a target"
+		} else if errors.Is(err, computeruse.ErrClosePending) {
 			details["recovery"] = "inspect_window"
 		} else if !session.Status().Paused && errors.Is(err, computeruse.ErrStaleObservation) {
 			details["recovery"] = "inspect_and_retarget"
 			message += "; no input was sent. Inspect the selected window with a fresh snapshot or screenshot and independently choose a new target; no manual resume is needed"
+			message += ". If the same check keeps failing, use a verified semantic control or report the limitation instead of repeating frame clicks"
 		}
 	} else {
 		message += "; input may have been dispatched. Inspect the selected window and business state before any new action; do not automatically replay the unknown action"

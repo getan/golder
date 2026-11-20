@@ -203,15 +203,28 @@ func (s *Session) useFrame(ctx context.Context, frameID string, x, y float64, po
 		}
 		s.mu.Lock()
 		lease, exists := s.frames[frameID]
-		delete(s.frames, frameID)
-		valid := exists && frameID != "" && lease.targetID == target.ID && lease.sequence == s.sequence &&
-			time.Since(lease.created) <= frameLeaseLifetime && (!point || (x >= 0 && y >= 0 && x < float64(lease.width) && y < float64(lease.height)))
+		sequence := s.sequence
+		if exists {
+			// Retain only a bounded tombstone, never a reusable platform token.
+			s.frames[frameID] = frameLease{created: lease.created}
+		}
 		s.mu.Unlock()
-		if !valid {
-			return noInputError(ErrStaleObservation)
+		switch {
+		case !exists || frameID == "":
+			return noInputError(staleReason("frame_missing", "no lease for this frame in the current session"))
+		case lease.token == "":
+			return noInputError(staleReason("frame_consumed", "this single-use frame has already been used"))
+		case lease.targetID != target.ID:
+			return noInputError(staleReason("frame_target_mismatch", "frame was issued for a different target"))
+		case lease.sequence != sequence:
+			return noInputError(staleReason("frame_sequence_changed", "frame belongs to an earlier session state"))
+		case time.Since(lease.created) > frameLeaseLifetime:
+			return noInputError(staleReason("frame_expired", "frame lease exceeded its lifetime"))
+		case point && (x < 0 || y < 0 || x >= float64(lease.width) || y >= float64(lease.height)):
+			return noInputError(staleReason("point_out_of_bounds", "point lies outside the reviewed frame"))
 		}
 		if err := ctx.Err(); err != nil {
-			return err
+			return noInputError(err)
 		}
 		return operation(ctx, bound, target, lease)
 	})

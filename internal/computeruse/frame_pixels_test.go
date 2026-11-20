@@ -8,6 +8,25 @@ import (
 	"testing"
 )
 
+func TestFrameDigestDetectsLowBitChange(t *testing.T) {
+	img := image.NewGray16(image.Rect(0, 0, 1, 1))
+	digest := func(value uint16) [32]byte {
+		img.SetGray16(0, 0, color.Gray16{Y: value})
+		var data bytes.Buffer
+		if err := png.Encode(&data, img); err != nil {
+			t.Fatal(err)
+		}
+		d, err := framePixelDigest(data.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	if digest(0x1101) == digest(0x1102) {
+		t.Fatal("lost 16-bit pixel change")
+	}
+}
+
 func TestFramePixelDigestIgnoresPNGEncoding(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 8, 6))
 	for y := 0; y < 6; y++ {

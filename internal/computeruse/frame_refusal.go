@@ -10,41 +10,30 @@ import (
 // the caller can observe again without an operator having to resume. A changed
 // or unprovable target remains target loss and pauses the session as before.
 func frameInputRefused(ctx context.Context, revalidate func() error) error {
+	return inputRefused(ctx, revalidate, staleReason("native_validation_failed", "no input was sent; native validation could not establish safe dispatch"))
+}
+
+func inputRefused(ctx context.Context, revalidate func() error, reason error) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return noInputError(err)
 	}
 	if err := revalidate(); err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return noInputError(ctx.Err())
 		}
 		if retryableValidationFailure(err) {
-			return noInputError(staleReason("target_changed", "no input was sent; the target changed after the reviewed frame; observe again"))
+			return noInputError(noInputValidationError(err))
 		}
 		return noInputError(fmt.Errorf("%w: no input was sent; target revalidation failed: %w", ErrTargetLost, err))
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return noInputError(err)
 	}
-	return noInputError(staleReason("frame_expired", "no input was sent because focus, visibility, geometry or the hit target could not be verified; capture a new frame or use an authorized semantic action"))
+	return noInputError(reason)
 }
 
 // semanticInputRefused is used only when native pre-dispatch checks prove no
 // AX request was sent. A failed dispatched request must never use this path.
 func semanticInputRefused(ctx context.Context, revalidate func() error) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := revalidate(); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if retryableValidationFailure(err) {
-			return noInputError(staleReason("target_changed", "no action was sent; the target changed after the reviewed snapshot; observe again"))
-		}
-		return noInputError(fmt.Errorf("%w: no action was sent; target revalidation failed: %w", ErrTargetLost, err))
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return noInputError(staleReason("control_not_supported", "no action was sent because the selected control could not be verified or does not support this action; observe again"))
+	return inputRefused(ctx, revalidate, staleReason("control_not_supported", "no action was sent because the selected control could not be verified or does not support this action; observe again"))
 }

@@ -59,8 +59,16 @@ func (s *Session) Observe(ctx context.Context) (Snapshot, error) {
 		}
 		result = BoundedSnapshot(hex.EncodeToString(nonce[:]), elements)
 		result.Truncated = result.Truncated || truncated
+		if source, ok := backend.(interface{ snapshotAXHint(string) string }); ok {
+			if hint := source.snapshotAXHint(backendID); hint != "" {
+				result.AX = &AXTreeStatus{ManualAccessibility: hint}
+			}
+		}
 		refs := make(map[string]Element, len(result.Elements))
 		for _, element := range result.Elements {
+			if result.AX != nil && element.Editable && element.Enabled && !element.Secure {
+				result.AX.EditableObserved = true
+			}
 			_, duplicate := refs[element.Ref]
 			if element.Ref == "" || duplicate {
 				return errors.New("computer use backend returned an empty or duplicate ref")

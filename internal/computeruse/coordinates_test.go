@@ -112,7 +112,7 @@ func TestCoordinateClickRequiresRecentSingleUseFrame(t *testing.T) {
 	if err := s.ClickFrame(ctx, frame.ID, 50, 25); err != nil || backend.called != 1 || backend.x != .25 || backend.y != .25 {
 		t.Fatalf("click: called=%d point=(%v,%v) err=%v", backend.called, backend.x, backend.y, err)
 	}
-	if err := s.ClickFrame(ctx, frame.ID, 50, 25); !errors.Is(err, ErrStaleObservation) {
+	if err := s.ClickFrame(ctx, frame.ID, 50, 25); !errors.Is(err, ErrNoInput) || StaleCode(err) != "frame_consumed" {
 		t.Fatalf("reused frame: %v", err)
 	}
 	frame, _ = s.Capture(ctx)
@@ -123,7 +123,7 @@ func TestCoordinateClickRequiresRecentSingleUseFrame(t *testing.T) {
 	if err := s.Resume(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ClickFrame(ctx, frame.ID, 0, 0); !errors.Is(err, ErrStaleObservation) {
+	if err := s.ClickFrame(ctx, frame.ID, 0, 0); !errors.Is(err, ErrNoInput) || StaleCode(err) != "frame_missing" {
 		t.Fatalf("pre-pause frame: %v", err)
 	}
 	frame, _ = s.Capture(ctx)
@@ -132,8 +132,15 @@ func TestCoordinateClickRequiresRecentSingleUseFrame(t *testing.T) {
 	lease.created = time.Now().Add(-frameLeaseLifetime - time.Second)
 	s.frames[frame.ID] = lease
 	s.mu.Unlock()
-	if err := s.ClickFrame(ctx, frame.ID, 0, 0); !errors.Is(err, ErrStaleObservation) {
+	if err := s.ClickFrame(ctx, frame.ID, 0, 0); !errors.Is(err, ErrNoInput) || StaleCode(err) != "frame_expired" {
 		t.Fatalf("expired frame: %v", err)
+	}
+	frame, err = s.Capture(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClickFrame(ctx, frame.ID, float64(frame.Width), 0); !errors.Is(err, ErrNoInput) || StaleCode(err) != "point_out_of_bounds" || backend.called != 1 {
+		t.Fatalf("out of bounds: %v, calls=%d", err, backend.called)
 	}
 }
 

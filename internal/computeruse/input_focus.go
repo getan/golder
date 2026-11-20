@@ -2,7 +2,6 @@ package computeruse
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -53,7 +52,7 @@ func prepareInputFocus(ctx context.Context, timeout, interval time.Duration, che
 		case <-ctx.Done():
 			return true, ctx.Err()
 		case <-deadline.C:
-			return true, fmt.Errorf("%w: no input was sent; the selected window did not regain focus", ErrStaleObservation)
+			return true, staleReason("focus_unavailable", "no input was sent; the selected window did not regain focus")
 		case <-ticker.C:
 		}
 	}

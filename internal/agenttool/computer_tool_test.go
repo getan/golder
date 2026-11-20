@@ -215,12 +215,13 @@ func TestComputerFillUsesSelectedControlSession(t *testing.T) {
 }
 
 type computerCoordinateBackend struct {
-	png   []byte
-	calls int
+	png           []byte
+	calls         int
+	validationErr error
 }
 
-func (*computerCoordinateBackend) Validate(context.Context, computeruse.Target, bool) error {
-	return nil
+func (b *computerCoordinateBackend) Validate(context.Context, computeruse.Target, bool) error {
+	return b.validationErr
 }
 func (*computerCoordinateBackend) Close() error { return nil }
 func (b *computerCoordinateBackend) Capture(context.Context, computeruse.Target) ([]byte, error) {
@@ -292,6 +293,16 @@ func TestComputerCoordinateClickRequiresCurrentFrame(t *testing.T) {
 	result, err = tool.Execute(context.Background(), "coordinate", raw, nil)
 	if err != nil || !result.IsError || backend.calls != 1 {
 		t.Fatalf("stale frame click: result=%+v calls=%d err=%v", result, backend.calls, err)
+	}
+	details, _ := result.Details.(map[string]any)
+	if details["reason"] != "frame_consumed" || details["execution_state"] != "not_dispatched" || details["recovery"] != "inspect_and_retarget" || !strings.Contains(agentcore.ContentToText(result.Content), "frame_consumed") {
+		t.Fatalf("consumed lease lost its diagnosis: %+v", result)
+	}
+	backend.validationErr = &computeruse.WindowDiagnostic{Reason: computeruse.WindowAXAmbiguous}
+	result, err = tool.Execute(context.Background(), "lost", raw, nil)
+	details, _ = result.Details.(map[string]any)
+	if err != nil || !result.IsError || !s.Status().Paused || backend.calls != 1 || details["reason"] != "target_lost" || details["execution_state"] != "not_dispatched" || details["recovery"] != "operator_required" {
+		t.Fatalf("lost target allowed recovery without operator: %+v, %v", result, err)
 	}
 }
 

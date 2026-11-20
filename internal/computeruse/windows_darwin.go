@@ -196,7 +196,10 @@ typedef struct {
 	int matches;
 } cu_ax_diagnostic;
 
-typedef struct { atomic_int cancelled; } cu_cancel_flag;
+enum { CU_INPUT_UNVERIFIED, CU_INPUT_OCCLUDED, CU_INPUT_AX_HIT, CU_INPUT_GEOMETRY };
+// Only the synchronous native dispatcher writes refusal; cancellation touches
+// only the atomic flag, and Go reads refusal after the dispatcher returns.
+typedef struct { atomic_int cancelled; int refusal; } cu_cancel_flag;
 static cu_cancel_flag *cu_cancel_new(void) { return calloc(1, sizeof(cu_cancel_flag)); }
 static void cu_cancel_set(cu_cancel_flag *flag) { atomic_store(&flag->cancelled, 1); }
 static int cu_cancelled(cu_cancel_flag *flag) { return flag && atomic_load(&flag->cancelled); }
@@ -502,20 +505,21 @@ static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, in
 // application is asked through AXManualAccessibility. This is only a hint:
 // failures are ignored, and every identity, focus and occlusion check remains
 // mandatory before any semantic or coordinate action.
-static void cu_ax_request_manual_accessibility(pid_t pid, cu_cancel_flag *flag) {
-	if (cu_cancelled(flag)) return;
+static AXError cu_ax_request_manual_accessibility(pid_t pid, cu_cancel_flag *flag) {
+	if (cu_cancelled(flag)) return kAXErrorCannotComplete;
 	AXUIElementRef app = AXUIElementCreateApplication(pid);
-	if (!app) return;
+	if (!app) return kAXErrorCannotComplete;
 	AXUIElementSetMessagingTimeout(app, 0.3);
-	AXUIElementSetAttributeValue(app, CFSTR("AXManualAccessibility"), kCFBooleanTrue);
+	AXError result = AXUIElementSetAttributeValue(app, CFSTR("AXManualAccessibility"), kCFBooleanTrue);
 	CFRelease(app);
+	return result;
 }
 
-static int cu_ax_collect_window(cu_window selected, AXUIElementRef expected, cu_ax_node *nodes, int cap, int *truncated, cu_ax_diagnostic *diag, cu_cancel_flag *flag) {
-	cu_ax_request_manual_accessibility(selected.pid, flag);
+static int cu_ax_collect_window(cu_window selected, AXUIElementRef expected, cu_ax_node *nodes, int cap, int *truncated, int *hint, cu_ax_diagnostic *diag, cu_cancel_flag *flag) {
 	AXUIElementRef window = cu_ax_window_diagnostic_cancel(selected, 0, diag, flag);
 	if (!window) return -1;
 	if (!expected || !CFEqual(window, expected)) { CFRelease(window); diag->reason = CU_AX_WINDOW; return -1; }
+	*hint = cu_ax_request_manual_accessibility(selected.pid, flag);
 	int count = 0;
 	cu_ax_collect(window, nodes, cap, &count, 0, 0, truncated, flag);
 	CFRelease(window);
@@ -595,10 +599,10 @@ static int cu_current_bounds(cu_window selected, CGRect *bounds) {
 }
 
 // Every window above the target must be known not to cover the requested point.
-static int cu_point_unobscured(cu_window selected, CGPoint point) {
+static int cu_point_unobscured(cu_window selected, CGPoint point, cu_cancel_flag *flag) {
 	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
 	if (!list) return 0;
-	int found = 0, clear = 1;
+	int found = 0, clear = 1, overlap = 0;
 	for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
 		CFDictionaryRef item = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
 		uint32_t number = 0;
@@ -614,9 +618,10 @@ static int cu_point_unobscured(cu_window selected, CGPoint point) {
 		double alpha = 1;
 		CFNumberRef a = (CFNumberRef)CFDictionaryGetValue(item, kCGWindowAlpha);
 		if ((a && !CFNumberGetValue(a, kCFNumberDoubleType, &alpha)) || !isfinite(alpha) || alpha < 0 || alpha > 1) { clear = 0; break; }
-		if (alpha > 0 && CGRectContainsPoint(bounds, point)) { clear = 0; break; }
+		if (alpha > 0 && CGRectContainsPoint(bounds, point)) { clear = 0; overlap = 1; }
 	}
 	CFRelease(list);
+	if (found && overlap) flag->refusal = CU_INPUT_OCCLUDED;
 	return found && clear;
 }
 
@@ -645,28 +650,31 @@ static int cu_point_ax_safe(AXUIElementRef window, CGPoint point, cu_cancel_flag
 	if (ok) ok = cu_ax_contains(window, hit, 0, &budget, flag);
 	if (hit) CFRelease(hit);
 	if (system) CFRelease(system);
+	if (!ok) flag->refusal = CU_INPUT_AX_HIT;
 	return ok;
+}
+
+static int cu_frame_bounds_match(cu_window selected, double x, double y, double w, double h, cu_cancel_flag *flag) {
+	CGRect bounds;
+	if (!cu_current_bounds(selected, &bounds)) return 0;
+	if (fabs(bounds.origin.x-x) <= 0.5 && fabs(bounds.origin.y-y) <= 0.5 && fabs(bounds.size.width-w) <= 0.5 && fabs(bounds.size.height-h) <= 0.5) return 1;
+	flag->refusal = CU_INPUT_GEOMETRY;
+	return 0;
 }
 
 static int cu_frame_point_safe(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, double nx, double ny, cu_cancel_flag *flag, CGPoint *out, int operator) {
 	if (!expected || cu_cancelled(flag) || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || !isfinite(nx) || !isfinite(ny) || bw <= 0 || bh <= 0 || nx < 0 || nx >= 1 || ny < 0 || ny >= 1) return 0;
-	CGRect bounds;
-	if (!cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
 	CGPoint point = CGPointMake(bx + nx*bw, by + ny*bh);
-	if (!cu_point_unobscured(selected, point)) return 0;
-	AXUIElementRef window = cu_ax_window(selected, 1, flag);
-	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
-	int ok = operator || cu_point_ax_safe(window, point, flag);
-	CFRelease(window);
-	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5 || !cu_point_unobscured(selected, point)) return 0;
-	window = cu_ax_window(selected, 1, flag);
-	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
-	ok = operator || cu_point_ax_safe(window, point, flag);
-	CFRelease(window);
-	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5 || !cu_point_unobscured(selected, point)) return 0;
-	window = cu_ax_window(selected, 1, flag);
-	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
-	CFRelease(window);
+	// Two AX hit checks, each followed by fresh geometry, stacking and focus
+	// checks. The last pass verifies the pinned window just before posting.
+	for (int pass = 0; pass < 3; pass++) {
+		if (cu_cancelled(flag) || !cu_frame_bounds_match(selected, bx, by, bw, bh, flag) || !cu_point_unobscured(selected, point, flag)) return 0;
+		AXUIElementRef window = cu_ax_window(selected, 1, flag);
+		if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+		int ok = pass == 2 || operator || cu_point_ax_safe(window, point, flag);
+		CFRelease(window);
+		if (!ok) return 0;
+	}
 	if (cu_cancelled(flag)) return 0;
 	*out = point;
 	return 1;
@@ -722,7 +730,7 @@ static int cu_focused_control_safe(cu_window selected, AXUIElementRef window, cu
 	if (ok) {
 		point.x += dimensions.width / 2;
 		point.y += dimensions.height / 2;
-		ok = cu_point_unobscured(selected, point);
+		ok = cu_point_unobscured(selected, point, flag);
 	}
 	if (position) CFRelease(position);
 	if (size) CFRelease(size);
@@ -948,6 +956,7 @@ type MacWindowCatalog struct {
 	refs         map[string]C.AXUIElementRef
 	snapshotID   string
 	snapshotFor  string
+	snapshotHint string
 	closed       bool
 }
 
@@ -1187,9 +1196,9 @@ func (c *MacWindowCatalog) Snapshot(ctx context.Context, target Target) (string,
 	}
 	done := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
-	var truncated C.int
+	var truncated, hint C.int
 	var diagnostic C.cu_ax_diagnostic
-	count := int(C.cu_ax_collect_window(window, c.pinned[target.ID], buffer, cap, &truncated, &diagnostic, flag))
+	count := int(C.cu_ax_collect_window(window, c.pinned[target.ID], buffer, cap, &truncated, &hint, &diagnostic, flag))
 	if !stop() {
 		<-done
 	}
@@ -1222,7 +1231,24 @@ func (c *MacWindowCatalog) Snapshot(ctx context.Context, target Target) (string,
 		return "", nil, false, err
 	}
 	c.refs, c.snapshotID, c.snapshotFor = refs, hex.EncodeToString(nonce[:]), target.ID
+	switch hint {
+	case C.kAXErrorSuccess:
+		c.snapshotHint = "accepted"
+	case C.kAXErrorAttributeUnsupported, C.kAXErrorNotImplemented:
+		c.snapshotHint = "unsupported"
+	default:
+		c.snapshotHint = "not_accepted"
+	}
 	return c.snapshotID, elements, truncated != 0, nil
+}
+
+func (c *MacWindowCatalog) snapshotAXHint(id string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if id == "" || c.snapshotID != id {
+		return ""
+	}
+	return c.snapshotHint
 }
 
 func (*MacWindowCatalog) SupportsAction(action string) bool {
@@ -1446,96 +1472,98 @@ func (c *MacWindowCatalog) OperatorTypeTextFrame(ctx context.Context, target Tar
 	})
 }
 
-func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, token string, dispatch func(C.cu_window, C.AXUIElementRef, macFrameBinding, *C.cu_cancel_flag) C.int) (err error) {
-	dispatched := false
-	defer func() {
-		if err != nil && !dispatched && !errors.Is(err, ErrNoInput) {
-			err = noInputError(err)
-		}
-	}()
+// Keep the last identity check inside the same gate as dispatch. Only failures
+// before send have a known no-input outcome; do not reclassify send's error.
+func dispatchReviewedFrame(target Target, token string, capture func() (string, error), focus func() (bool, error), validate func() error, send func(macFrameBinding) error) error {
 	var binding macFrameBinding
-	if err := json.Unmarshal([]byte(token), &binding); err != nil || binding.Target != target.ID {
-		return staleReason("frame_expired", "the reviewed frame token is invalid or belongs to another target; observe again")
+	if err := json.Unmarshal([]byte(token), &binding); err != nil {
+		return noInputError(staleReason("frame_token_invalid", "invalid reviewed frame binding"))
 	}
-	_, freshToken, err := c.CaptureBound(ctx, target)
+	if binding.Target != target.ID {
+		return noInputError(staleReason("frame_target_mismatch", "reviewed frame does not bind this target"))
+	}
+	freshToken, err := capture()
 	if err != nil {
-		if errors.Is(err, ErrStaleObservation) {
-			return staleReason("frame_expired", "the target changed before the reviewed frame could be captured again; observe again")
-		}
-		return noInputValidationError(err)
+		return noInputError(noInputValidationError(err))
 	}
 	var current macFrameBinding
-	if json.Unmarshal([]byte(freshToken), &current) != nil || current.Target != binding.Target {
-		return staleReason("target_changed", "the re-captured frame belongs to another target; observe again")
+	if json.Unmarshal([]byte(freshToken), &current) != nil || current.Target != target.ID {
+		return noInputError(fmt.Errorf("%w: capture did not prove the pinned identity", ErrTargetLost))
 	}
 	if current.X != binding.X || current.Y != binding.Y || current.W != binding.W || current.H != binding.H {
-		return staleReason("window_geometry_changed", "the window moved or resized after the reviewed frame; observe again")
+		return noInputError(staleReason("window_geometry_changed", "the window moved or resized after the reviewed frame"))
 	}
 	if current.Pixels != binding.Pixels {
-		return staleReason("frame_pixels_changed", "the window pixels changed after the reviewed frame; observe again")
+		return noInputError(staleReason("frame_pixels_changed", "the window pixels changed after the reviewed frame"))
 	}
-	changed, err := prepareInputFocus(ctx, 2*time.Second, 100*time.Millisecond,
-		func() (bool, error) { return c.selectedFocus(ctx, target) },
-		func() error { return c.focusSelected(ctx, target) })
+	changed, err := focus()
 	if err != nil {
-		if errors.Is(err, ErrStaleObservation) {
-			return staleReason("focus_unavailable", "no input was sent because the window could not be focused or verified: "+err.Error())
-		}
-		return noInputValidationError(err)
+		return noInputError(noInputValidationError(err))
 	}
 	if changed {
-		// Activation can move a window or change its controls. The old frame is
-		// never silently rebound to that new UI, even though the target is ours.
-		_, freshToken, err = c.CaptureBound(ctx, target)
-		if err != nil {
-			if errors.Is(err, ErrStaleObservation) {
-				return staleReason("frame_expired", "the target changed after activation; observe again")
-			}
-			return noInputValidationError(err)
-		}
-		if json.Unmarshal([]byte(freshToken), &current) != nil || current.Target != binding.Target {
-			return staleReason("target_changed", "the post-activation frame belongs to another target; observe again")
-		}
-		if current.X != binding.X || current.Y != binding.Y || current.W != binding.W || current.H != binding.H {
-			return staleReason("window_geometry_changed", "activation moved or resized the window; observe again")
-		}
-		if current.Pixels != binding.Pixels {
-			return staleReason("frame_pixels_changed", "activation changed the window pixels; observe again")
-		}
+		return noInputError(staleReason("focus_restored", "the authorized window was brought forward; inspect its new frame before choosing an action"))
 	}
-	if err := c.Validate(ctx, target, true); err != nil {
-		if errors.Is(err, ErrStaleObservation) || errors.Is(err, ErrTargetLost) {
-			return staleReason("target_changed", "the target could not be revalidated before input; observe again")
-		}
-		return noInputValidationError(err)
+	if err := validate(); err != nil {
+		// Do not demote target loss (including its WindowDiagnostic) to stale.
+		return noInputError(err)
 	}
+	return send(binding)
+}
+
+func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, token string, dispatch func(C.cu_window, C.AXUIElementRef, macFrameBinding, *C.cu_cancel_flag) C.int) error {
+	return dispatchReviewedFrame(target, token, func() (string, error) {
+		_, current, err := c.CaptureBound(ctx, target)
+		return current, err
+	}, func() (bool, error) {
+		return prepareInputFocus(ctx, 2*time.Second, 100*time.Millisecond,
+			func() (bool, error) { return c.selectedFocus(ctx, target) },
+			func() error { return c.focusSelected(ctx, target) })
+	}, func() error { return c.Validate(ctx, target, true) }, func(binding macFrameBinding) error {
+		return c.sendFrame(ctx, target, binding, dispatch)
+	})
+}
+
+func (c *MacWindowCatalog) sendFrame(ctx context.Context, target Target, binding macFrameBinding, dispatch func(C.cu_window, C.AXUIElementRef, macFrameBinding, *C.cu_cancel_flag) C.int) error {
 	c.mu.Lock()
 	window, ok := c.windows[target.ID]
 	if c.closed || !ok || c.pinned[target.ID] == 0 {
 		c.mu.Unlock()
-		return ErrTargetLost
+		return noInputError(ErrTargetLost)
 	}
 	flag := C.cu_cancel_new()
 	if flag == nil {
 		c.mu.Unlock()
-		return errors.New("allocate input cancellation flag")
+		return noInputError(errors.New("allocate input cancellation flag"))
 	}
 	done := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
 	sent := dispatch(window, c.pinned[target.ID], binding, flag)
-	dispatched = sent != 0
+	refusal := flag.refusal
 	if !stop() {
 		<-done
 	}
 	C.free(unsafe.Pointer(flag))
 	c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
+		if sent == 0 {
+			return noInputError(err)
+		}
 		return err
 	}
 	if sent == 0 {
 		// Native frame dispatchers return zero only before posting an
 		// event. Recheck the same pinned window; never replay the input.
-		return frameInputRefused(ctx, func() error { return c.Validate(ctx, target, false) })
+		check := func() error { return c.Validate(ctx, target, false) }
+		switch refusal {
+		case C.CU_INPUT_OCCLUDED:
+			return inputRefused(ctx, check, staleReason("point_occluded", "the reviewed point is covered"))
+		case C.CU_INPUT_AX_HIT:
+			return inputRefused(ctx, check, staleReason("ax_hit_unverified", "could not verify a safe direct AX control at the point"))
+		case C.CU_INPUT_GEOMETRY:
+			return inputRefused(ctx, check, staleReason("window_geometry_changed", "window geometry changed before dispatch"))
+		default:
+			return frameInputRefused(ctx, check)
+		}
 	}
 	if sent < 0 {
 		return errors.New("input was only partially dispatched; inspect the selected window before any new action; do not replay the text")

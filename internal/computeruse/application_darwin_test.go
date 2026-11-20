@@ -67,7 +67,7 @@ func TestMacApplicationInventoryMatchesBilingualAlias(t *testing.T) {
 	macTestBundle(t, root, "DoubaoWork.app", "example.doubao.work", "DoubaoWork")
 	catalog := NewMacWindowCatalog()
 	t.Cleanup(func() { _ = catalog.Close() })
-	for _, query := range []string{"豆包work", "豆包工作", "doubao work"} {
+	for _, query := range []string{"豆包work", "豆包 work", "豆包工作", "doubao work"} {
 		apps, err := catalog.applicationsIn(context.Background(), query, []string{root})
 		if err != nil || len(apps) != 1 {
 			t.Fatalf("applicationsIn(%q) = %+v, %v", query, apps, err)

@@ -5,7 +5,7 @@ package computeruse
 // a document title or a different app cannot be selected by a partial name.
 var applicationAliasGroups = [][]string{
 	{"豆包", "doubao"},
-	{"豆包工作", "豆包work", "doubaowork", "doubao work", "doubao work app"},
+	{"豆包工作", "豆包work", "豆包 work", "doubaowork", "doubao work", "doubao work app"},
 	{"计算器", "calculator"},
 }
 
