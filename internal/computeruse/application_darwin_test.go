@@ -62,6 +62,22 @@ func TestMacApplicationInventorySupportsCalculatorChineseName(t *testing.T) {
 	}
 }
 
+func TestMacApplicationInventoryMatchesBilingualAlias(t *testing.T) {
+	root := t.TempDir()
+	macTestBundle(t, root, "DoubaoWork.app", "example.doubao.work", "DoubaoWork")
+	catalog := NewMacWindowCatalog()
+	t.Cleanup(func() { _ = catalog.Close() })
+	for _, query := range []string{"豆包work", "豆包工作", "doubao work"} {
+		apps, err := catalog.applicationsIn(context.Background(), query, []string{root})
+		if err != nil || len(apps) != 1 {
+			t.Fatalf("applicationsIn(%q) = %+v, %v", query, apps, err)
+		}
+		if apps[0].BundleID != "example.doubao.work" {
+			t.Fatalf("bundle id = %q", apps[0].BundleID)
+		}
+	}
+}
+
 func TestMacApplicationLaunchDoesNotStealFrontendFocus(t *testing.T) {
 	path := "/System/Applications/Calculator.app"
 	if got := macApplicationLaunchArgs(path); !slices.Equal(got, []string{"-g", "-a", path}) {

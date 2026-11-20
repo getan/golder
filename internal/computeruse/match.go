@@ -5,8 +5,9 @@ import "strings"
 // MatchApplications returns indexes whose application name exactly matches the
 // requested name after case and whitespace normalization. A unique match can
 // be used directly; ambiguous matches require an operator's selection.
-// Substring or title matching is deliberately excluded because a document or a
-// different application may contain the requested name.
+// Substring, title and alias matching are deliberately excluded here because a
+// document or a different application may contain the requested name; aliases
+// are only used when discovering installed applications.
 func MatchApplications(name string, targets []Target) []int {
 	want := normalizeApplicationName(name)
 	if want == "" {

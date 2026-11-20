@@ -15,6 +15,7 @@ type Application struct {
 	Name     string
 	Identity string
 	Detail   string
+	BundleID string
 }
 
 // ApplicationLauncher is an optional platform capability. Names are matched
@@ -52,6 +53,9 @@ type ApplicationResolution struct {
 	Targets      []Target
 	Applications []Application
 	Matched      bool
+	// NotFound is set when no installed application or window matched the
+	// requested name. Targets may still be offered for an explicit choice.
+	NotFound bool
 }
 
 // ResolveApplication first reuses matching discovered windows. If none exist, it
@@ -97,7 +101,7 @@ func ResolveApplication(ctx context.Context, backend PlatformBackend, name strin
 		return ApplicationResolution{Applications: apps}, nil
 	}
 	if len(apps) == 0 {
-		return ApplicationResolution{Targets: targets}, nil
+		return ApplicationResolution{Targets: targets, NotFound: true}, nil
 	}
 	// The requested localized name can differ from the window owner's name.
 	// Reuse the exact catalogued application before asking the OS to open it.

@@ -27,3 +27,19 @@ func TestMatchApplicationsNeverGuessFromPartialNamesOrTitles(t *testing.T) {
 		}
 	}
 }
+
+func TestMatchApplicationsDoesNotWidenWindowIdentityWithAliases(t *testing.T) {
+	targets := []Target{
+		{ID: "one", Application: "DoubaoWork", Window: "Main"},
+		{ID: "two", Application: "Doubao", Window: "Main"},
+		{ID: "three", Application: "Notes", Window: "DoubaoWork"},
+	}
+	for _, query := range []string{"豆包work", "豆包工作", "doubao work"} {
+		if got := MatchApplications(query, targets); got != nil {
+			t.Errorf("MatchApplications(%q) = %v, want no window match", query, got)
+		}
+	}
+	if got := MatchApplications("work", targets); got != nil {
+		t.Errorf("partial name matched: %v", got)
+	}
+}

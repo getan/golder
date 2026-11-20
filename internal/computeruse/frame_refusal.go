@@ -18,14 +18,14 @@ func frameInputRefused(ctx context.Context, revalidate func() error) error {
 			return ctx.Err()
 		}
 		if retryableValidationFailure(err) {
-			return noInputError(noInputValidationError(err))
+			return noInputError(staleReason("target_changed", "no input was sent; the target changed after the reviewed frame; observe again"))
 		}
 		return noInputError(fmt.Errorf("%w: no input was sent; target revalidation failed: %w", ErrTargetLost, err))
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return noInputError(fmt.Errorf("%w: no input was sent because focus, visibility, geometry or the hit target could not be verified; capture a new frame or use an authorized semantic action", ErrStaleObservation))
+	return noInputError(staleReason("frame_expired", "no input was sent because focus, visibility, geometry or the hit target could not be verified; capture a new frame or use an authorized semantic action"))
 }
 
 // semanticInputRefused is used only when native pre-dispatch checks prove no
@@ -39,12 +39,12 @@ func semanticInputRefused(ctx context.Context, revalidate func() error) error {
 			return ctx.Err()
 		}
 		if retryableValidationFailure(err) {
-			return noInputError(noInputValidationError(err))
+			return noInputError(staleReason("target_changed", "no action was sent; the target changed after the reviewed snapshot; observe again"))
 		}
 		return noInputError(fmt.Errorf("%w: no action was sent; target revalidation failed: %w", ErrTargetLost, err))
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return noInputError(fmt.Errorf("%w: no action was sent because the selected control could not be verified or does not support this action; observe again", ErrStaleObservation))
+	return noInputError(staleReason("control_not_supported", "no action was sent because the selected control could not be verified or does not support this action; observe again"))
 }

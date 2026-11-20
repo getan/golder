@@ -178,6 +178,9 @@ func (a *App) applyComputerResolution(resolution computeruse.ApplicationResoluti
 	a.computerApplications = resolution.Applications
 	a.computerTargets, a.computerSelected = resolution.Targets, -1
 	a.computerMatched = resolution.Matched
+	if resolution.NotFound {
+		a.computerError = "No installed application matched the requested name. Choose a window, or search again with the application's installed or localized name."
+	}
 	if a.computerSuggested == "" || !resolution.Matched {
 		return
 	}
@@ -542,7 +545,11 @@ func (a *App) computerPicker(c *ui.Context) {
 					ui.Column(c).Gap(4).Children(func() {
 						for i, app := range a.computerApplications {
 							i, app := i, app
-							if subtleButton(c.Key(app.ID), app.Name+" · "+app.Detail, a.computerBusy).FillWidth().Clicked() {
+							label := app.Name + " · " + app.Detail
+							if app.BundleID != "" {
+								label += " · " + app.BundleID
+							}
+							if subtleButton(c.Key(app.ID), label, a.computerBusy).FillWidth().Clicked() {
 								a.launchComputerApplication(i)
 							}
 						}

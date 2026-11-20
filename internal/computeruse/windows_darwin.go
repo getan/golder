@@ -498,7 +498,21 @@ static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, in
 	if (children) CFRelease(children);
 }
 
+// Chromium and Electron can expose a richer accessibility tree after the
+// application is asked through AXManualAccessibility. This is only a hint:
+// failures are ignored, and every identity, focus and occlusion check remains
+// mandatory before any semantic or coordinate action.
+static void cu_ax_request_manual_accessibility(pid_t pid, cu_cancel_flag *flag) {
+	if (cu_cancelled(flag)) return;
+	AXUIElementRef app = AXUIElementCreateApplication(pid);
+	if (!app) return;
+	AXUIElementSetMessagingTimeout(app, 0.3);
+	AXUIElementSetAttributeValue(app, CFSTR("AXManualAccessibility"), kCFBooleanTrue);
+	CFRelease(app);
+}
+
 static int cu_ax_collect_window(cu_window selected, AXUIElementRef expected, cu_ax_node *nodes, int cap, int *truncated, cu_ax_diagnostic *diag, cu_cancel_flag *flag) {
+	cu_ax_request_manual_accessibility(selected.pid, flag);
 	AXUIElementRef window = cu_ax_window_diagnostic_cancel(selected, 0, diag, flag);
 	if (!window) return -1;
 	if (!expected || !CFEqual(window, expected)) { CFRelease(window); diag->reason = CU_AX_WINDOW; return -1; }
@@ -912,7 +926,6 @@ import "C"
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1316,7 +1329,7 @@ type macFrameBinding struct {
 	Target string
 	X, Y   float64
 	W, H   float64
-	Digest [32]byte
+	Pixels [32]byte
 }
 
 func (c *MacWindowCatalog) CaptureBound(ctx context.Context, target Target) ([]byte, string, error) {
@@ -1363,7 +1376,11 @@ func (c *MacWindowCatalog) CaptureBound(ctx context.Context, target Target) ([]b
 		return nil, "", err
 	}
 	image := C.GoBytes(data, C.int(length))
-	binding, err := json.Marshal(macFrameBinding{Target: target.ID, X: float64(x), Y: float64(y), W: float64(w), H: float64(h), Digest: sha256.Sum256(image)})
+	pixels, err := framePixelDigest(image)
+	if err != nil {
+		return nil, "", fmt.Errorf("decode captured frame: %w", err)
+	}
+	binding, err := json.Marshal(macFrameBinding{Target: target.ID, X: float64(x), Y: float64(y), W: float64(w), H: float64(h), Pixels: pixels})
 	if err != nil {
 		return nil, "", err
 	}
@@ -1438,34 +1455,58 @@ func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, tok
 	}()
 	var binding macFrameBinding
 	if err := json.Unmarshal([]byte(token), &binding); err != nil || binding.Target != target.ID {
-		return ErrStaleObservation
+		return staleReason("frame_expired", "the reviewed frame token is invalid or belongs to another target; observe again")
 	}
-	fresh, freshToken, err := c.CaptureBound(ctx, target)
+	_, freshToken, err := c.CaptureBound(ctx, target)
 	if err != nil {
+		if errors.Is(err, ErrStaleObservation) {
+			return staleReason("frame_expired", "the target changed before the reviewed frame could be captured again; observe again")
+		}
 		return noInputValidationError(err)
 	}
 	var current macFrameBinding
-	if json.Unmarshal([]byte(freshToken), &current) != nil || current != binding || sha256.Sum256(fresh) != binding.Digest {
-		return ErrStaleObservation
+	if json.Unmarshal([]byte(freshToken), &current) != nil || current.Target != binding.Target {
+		return staleReason("target_changed", "the re-captured frame belongs to another target; observe again")
+	}
+	if current.X != binding.X || current.Y != binding.Y || current.W != binding.W || current.H != binding.H {
+		return staleReason("window_geometry_changed", "the window moved or resized after the reviewed frame; observe again")
+	}
+	if current.Pixels != binding.Pixels {
+		return staleReason("frame_pixels_changed", "the window pixels changed after the reviewed frame; observe again")
 	}
 	changed, err := prepareInputFocus(ctx, 2*time.Second, 100*time.Millisecond,
 		func() (bool, error) { return c.selectedFocus(ctx, target) },
 		func() error { return c.focusSelected(ctx, target) })
 	if err != nil {
+		if errors.Is(err, ErrStaleObservation) {
+			return staleReason("focus_unavailable", "no input was sent because the window could not be focused or verified: "+err.Error())
+		}
 		return noInputValidationError(err)
 	}
 	if changed {
 		// Activation can move a window or change its controls. The old frame is
 		// never silently rebound to that new UI, even though the target is ours.
-		fresh, freshToken, err = c.CaptureBound(ctx, target)
+		_, freshToken, err = c.CaptureBound(ctx, target)
 		if err != nil {
+			if errors.Is(err, ErrStaleObservation) {
+				return staleReason("frame_expired", "the target changed after activation; observe again")
+			}
 			return noInputValidationError(err)
 		}
-		if json.Unmarshal([]byte(freshToken), &current) != nil || current != binding || sha256.Sum256(fresh) != binding.Digest {
-			return ErrStaleObservation
+		if json.Unmarshal([]byte(freshToken), &current) != nil || current.Target != binding.Target {
+			return staleReason("target_changed", "the post-activation frame belongs to another target; observe again")
+		}
+		if current.X != binding.X || current.Y != binding.Y || current.W != binding.W || current.H != binding.H {
+			return staleReason("window_geometry_changed", "activation moved or resized the window; observe again")
+		}
+		if current.Pixels != binding.Pixels {
+			return staleReason("frame_pixels_changed", "activation changed the window pixels; observe again")
 		}
 	}
 	if err := c.Validate(ctx, target, true); err != nil {
+		if errors.Is(err, ErrStaleObservation) || errors.Is(err, ErrTargetLost) {
+			return staleReason("target_changed", "the target could not be revalidated before input; observe again")
+		}
 		return noInputValidationError(err)
 	}
 	c.mu.Lock()

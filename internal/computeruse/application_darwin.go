@@ -102,7 +102,13 @@ func (c *MacWindowCatalog) applicationsIn(ctx context.Context, requested string,
 				return filepath.SkipDir
 			}
 			base := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-			matches := normalizeApplicationName(base) == want || normalizeApplicationName(display) == want || normalizeApplicationName(bundleName) == want
+			matches := false
+			for _, candidate := range expandApplicationAliases([]string{base, display, bundleName}) {
+				if normalizeApplicationName(candidate) == want {
+					matches = true
+					break
+				}
+			}
 			// Calculator's display name is not localized in every macOS bundle.
 			if strings.EqualFold(bundleID, "com.apple.calculator") && want == "计算器" {
 				matches = true
@@ -121,7 +127,7 @@ func (c *MacWindowCatalog) applicationsIn(ctx context.Context, requested string,
 			if display == "" {
 				display = base
 			}
-			app := Application{ID: hex.EncodeToString(nonce[:]), Name: display, Identity: canonical, Detail: path}
+			app := Application{ID: hex.EncodeToString(nonce[:]), Name: display, Identity: canonical, Detail: path, BundleID: bundleID}
 			found = append(found, macApplication{application: app, path: canonical, bundleID: bundleID, file: file})
 			return filepath.SkipDir
 		})
