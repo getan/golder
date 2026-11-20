@@ -86,6 +86,12 @@ static GolderDesktopLayout *owner;
     [self restore];
     ignorePreference=YES;
     if (![self live] || host.attachedSheet) return;
+    if (!host.isVisible || !host.isOnActiveSpace || host.isMiniaturized) {
+        // No sheet can be shown. Authorize the non-moving path instead of
+        // leaving every foreground input blocked behind an invisible prompt.
+        golderDesktopChoice(key,1,ticket);
+        return;
+    }
     NSAlert *a = [[[NSAlert alloc] init] autorelease];
     a.messageText=@"无法安全并排 / Layout unavailable";
     a.informativeText=why;

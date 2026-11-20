@@ -3,25 +3,15 @@ package computeruse
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"hash"
 	"image/png"
 )
 
-// framePixelDigest identifies decoded pixels, not the PNG encoding. Two
-// encodings of the same image compare equal; a changed pixel, geometry or
-// undecodable frame still changes or rejects the digest.
-func framePixelDigest(pngBytes []byte) ([32]byte, error) {
-	d, err := fingerprintFrame(pngBytes)
-	return d.digest, err
-}
-
 const tileCount = 4 // per axis
 
 type frameFingerprint struct {
-	digest [32]byte
-	tiles  []byte
+	tiles []byte
 }
 
 func fingerprintFrame(pngBytes []byte) (frameFingerprint, error) {
@@ -43,11 +33,6 @@ func fingerprintFrame(pngBytes []byte) (frameFingerprint, error) {
 	for i := range tiles {
 		tiles[i] = sha256.New()
 	}
-	root := sha256.New()
-	var header [8]byte
-	binary.BigEndian.PutUint32(header[0:4], uint32(width))
-	binary.BigEndian.PutUint32(header[4:8], uint32(height))
-	_, _ = root.Write(header[:])
 	row := make([]byte, 0, width*8)
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		row = row[:0]
@@ -64,10 +49,8 @@ func fingerprintFrame(pngBytes []byte) (frameFingerprint, error) {
 	var out frameFingerprint
 	for _, tile := range tiles {
 		d := tile.Sum(nil)
-		root.Write(d)
 		// Regional equality supplements, but never replaces, native AX checks.
 		out.tiles = append(out.tiles, d...)
 	}
-	copy(out.digest[:], root.Sum(nil))
 	return out, nil
 }

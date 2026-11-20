@@ -70,7 +70,30 @@ func TestPointTileLocatesChangeWithoutRelaxingDigest(t *testing.T) {
 	a := fingerprint()
 	img.SetGray(3, 7, color.Gray{Y: 1})
 	b := fingerprint()
-	if a.digest == b.digest || comparePointTile(a.tiles, b.tiles, [2]float64{3. / 7, 7. / 9}) != "changed" || comparePointTile(a.tiles, b.tiles, [2]float64{0, 0}) != "unchanged" {
+	if comparePointTile(a.tiles, b.tiles, [2]float64{3. / 7, 7. / 9}) != "changed" || comparePointTile(a.tiles, b.tiles, [2]float64{0, 0}) != "unchanged" {
 		t.Fatal("incorrect tile or whole-frame digest")
+	}
+}
+
+func TestInspectPointRejectsFrameFromEarlierSequence(t *testing.T) {
+	var raw bytes.Buffer
+	if err := png.Encode(&raw, image.NewGray(image.Rect(0, 0, 7, 9))); err != nil {
+		t.Fatal(err)
+	}
+	b := &probeFixture{frameBoundTestBackend: frameBoundTestBackend{png: raw.Bytes()}}
+	s := New(b)
+	ctx := context.Background()
+	if err := s.Start(ctx, Target{ID: "w"}, Capabilities{Observe: true}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := s.Capture(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	s.sequence++
+	s.mu.Unlock()
+	if _, err := s.InspectPoint(ctx, f.ID, 2, 3); !errors.Is(err, ErrStaleObservation) {
+		t.Fatalf("pre-sequence frame was accepted: %v", err)
 	}
 }

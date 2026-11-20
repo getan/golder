@@ -663,14 +663,25 @@ static int cu_direct_control(AXUIElementRef element) {
 }
 
 static int cu_point_ax_safe(AXUIElementRef window, CGPoint point, cu_cancel_flag *flag) {
-	AXUIElementRef system = AXUIElementCreateSystemWide();
-	AXUIElementRef hit = NULL;
-	int ok = system && AXUIElementCopyElementAtPosition(system, point.x, point.y, &hit) == kAXErrorSuccess && hit && !CFEqual(window, hit) && cu_direct_control(hit);
+	int ok = 0;
 	int budget = 128;
-	if (ok && flag->reviewed) ok = CFEqual(hit, flag->reviewed);
-	if (ok) ok = cu_ax_contains(window, hit, 0, &budget, flag);
-	if (hit) CFRelease(hit);
-	if (system) CFRelease(system);
+	if (flag->reviewed) {
+		// The reviewed control can be hidden behind an AXGroup image map or a
+		// Chromium container, so verify the control itself at the point rather
+		// than requiring the system hit to be its exact topmost element.
+		CGRect reviewedBounds;
+		ok = cu_ax_geometry(flag->reviewed, &reviewedBounds) && CGRectContainsPoint(reviewedBounds, point) &&
+			cu_direct_control(flag->reviewed);
+		if (ok) ok = cu_ax_contains(window, flag->reviewed, 0, &budget, flag);
+	} else {
+		AXUIElementRef system = AXUIElementCreateSystemWide();
+		AXUIElementRef hit = NULL;
+		ok = system && AXUIElementCopyElementAtPosition(system, point.x, point.y, &hit) == kAXErrorSuccess && hit &&
+			!CFEqual(window, hit) && cu_direct_control(hit);
+		if (ok) ok = cu_ax_contains(window, hit, 0, &budget, flag);
+		if (hit) CFRelease(hit);
+		if (system) CFRelease(system);
+	}
 	if (!ok) flag->refusal = CU_INPUT_AX_HIT;
 	return ok;
 }
@@ -683,7 +694,59 @@ static int cu_frame_bounds_match(cu_window selected, double x, double y, double 
 	return 0;
 }
 
-typedef struct { int member, safe, editable, visible; char role[32]; AXUIElementRef control; } cu_probe;
+typedef struct { int member, safe, editable, visible, tiles; char role[32]; AXUIElementRef control; } cu_probe;
+
+// 4x4 tiles, row-major. A reviewed control can span several tiles; region
+// comparison must cover every one of them rather than trusting a model mask.
+static int cu_ax_tile_mask(CGRect window, CGRect control) {
+	if (CGRectIsEmpty(window) || CGRectIsEmpty(control)) return 0;
+	int mask = 0;
+	for (int y = 0; y < 4; y++) {
+		for (int x = 0; x < 4; x++) {
+			CGRect tile = CGRectMake(window.origin.x + window.size.width*x/4,
+				window.origin.y + window.size.height*y/4,
+				window.size.width/4 + 1, window.size.height/4 + 1);
+			if (CGRectIntersectsRect(tile, control)) mask |= 1 << (y*4+x);
+		}
+	}
+	return mask;
+}
+
+// Bounded fallback when AXUIElementCopyElementAtPosition returns a container.
+// It never crosses a secure/unknown subtree and returns only text controls or
+// buttons; a container is never promoted to an input target.
+static AXUIElementRef cu_ax_find_control_at_point(AXUIElementRef element, CGPoint point, int depth, int *budget, cu_cancel_flag *flag) {
+	if (!element || depth > 16 || *budget <= 0 || cu_cancelled(flag)) return NULL;
+	(*budget)--;
+	AXUIElementSetMessagingTimeout(element, 0.3);
+	CFTypeRef role = NULL, subrole = NULL;
+	AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role);
+	AXUIElementCopyAttributeValue(element, kAXSubroleAttribute, &subrole);
+	int secure = cu_ax_secure_or_unknown(role, subrole);
+	int text = cu_ax_text_role(role);
+	int button = role && CFGetTypeID(role) == CFStringGetTypeID() && CFEqual(role, CFSTR("AXButton"));
+	if (role) CFRelease(role);
+	if (subrole) CFRelease(subrole);
+	if (secure) return NULL;
+	if (text || button) {
+		CGRect bounds;
+		if (cu_ax_geometry(element, &bounds) && CGRectContainsPoint(bounds, point)) return (AXUIElementRef)CFRetain(element);
+		return NULL;
+	}
+	CGRect bounds;
+	if (cu_ax_geometry(element, &bounds) && !CGRectContainsPoint(bounds, point)) return NULL;
+	CFTypeRef children = NULL;
+	AXUIElementRef found = NULL;
+	if (AXUIElementCopyAttributeValue(element, kAXChildrenAttribute, &children) == kAXErrorSuccess && children && CFGetTypeID(children) == CFArrayGetTypeID()) {
+		CFArrayRef array = (CFArrayRef)children;
+		for (CFIndex i = 0; i < CFArrayGetCount(array) && !found; i++) {
+			CFTypeRef child = CFArrayGetValueAtIndex(array, i);
+			if (child && CFGetTypeID(child) == AXUIElementGetTypeID()) found = cu_ax_find_control_at_point((AXUIElementRef)child, point, depth+1, budget, flag);
+		}
+	}
+	if (children) CFRelease(children);
+	return found;
+}
 
 // Independent of the bounded children walk: a hit can be absent from AXChildren
 // yet have a parent chain to the pinned window. Never return arbitrary strings
@@ -698,6 +761,16 @@ static int cu_probe_point(cu_window selected, AXUIElementRef expected, CGRect bo
 	AXError rc = AXUIElementCopyElementAtPosition(app,p.x,p.y,&hit);
 	CFRelease(app);
 	if (rc != kAXErrorSuccess || !hit) { if (hit) CFRelease(hit); return 1; }
+	if (!cu_direct_control(hit)) {
+		// Chromium can return a container while exposing a text control deeper
+		// in the tree. Search only this pinned window, bounded and non-secure.
+		int budget = 128;
+		AXUIElementRef found = cu_ax_find_control_at_point(expected, p, 0, &budget, flag);
+		if (found) {
+			CFRelease(hit);
+			hit = found;
+		}
+	}
 	pid_t pid = 0;
 	AXUIElementRef node = (AXUIElementRef)CFRetain(hit);
 	int safe = 1, text = 0;
@@ -728,7 +801,11 @@ static int cu_probe_point(cu_window selected, AXUIElementRef expected, CGRect bo
 	if (out->member && safe && !cu_cancelled(flag)) {
 		strcpy(out->role,label);
 		out->safe = text || strcmp(label,"AXButton")==0; // opaque containers aren't proven safe controls
-		if (out->safe) out->control = (AXUIElementRef)CFRetain(hit);
+		if (out->safe) {
+			out->control = (AXUIElementRef)CFRetain(hit);
+			CGRect control;
+			if (cu_ax_geometry(hit, &control)) out->tiles = cu_ax_tile_mask(bounds, control);
+		}
 		Boolean settable=false;
 		out->editable=text && AXUIElementIsAttributeSettable(hit,kAXValueAttribute,&settable)==kAXErrorSuccess && settable;
 	}
@@ -745,7 +822,7 @@ static int cu_frame_point_safe(cu_window selected, AXUIElementRef expected, doub
 		if (cu_cancelled(flag) || !cu_frame_bounds_match(selected, bx, by, bw, bh, flag) || !cu_point_unobscured(selected, point, flag)) return 0;
 		AXUIElementRef window = cu_ax_window(selected, 1, flag);
 		if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
-		int ok = pass == 2 || operator || cu_point_ax_safe(window, point, flag);
+		int ok = operator || cu_point_ax_safe(window, point, flag);
 		CFRelease(window);
 		if (!ok) return 0;
 	}
@@ -1068,6 +1145,9 @@ func (s *Session) EnableDesktopLayout(host uintptr) {
 		}
 		if !s.status.Active || s.status.Paused || s.status.Target.ID != id {
 			return ErrPaused
+		}
+		if d.expire(s.sequence) {
+			return nil
 		}
 		return d.beforeInput(s.sequence)
 	}
@@ -1584,9 +1664,13 @@ func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, toke
 	c.clearPointReviewLocked()
 	mask, _ := ctx.Value(pointRegionsKey{}).(uint16)
 	maskPoint := pointMask([2]float64{x, y})
-	bound := checked != 0 && ctx.Err() == nil && hit.control != 0 && old.Nonce != "" && mask != 0 && sameRegions(old.Tiles, now.Tiles, mask|maskPoint)
+	// Required regions are computed from the hit control, not chosen by the
+	// model. context_tiles may add visible context but cannot remove them.
+	required := uint16(hit.tiles) | maskPoint
+	regions := required | mask
+	bound := checked != 0 && ctx.Err() == nil && hit.control != 0 && old.Nonce != "" && required != 0 && sameRegions(old.Tiles, now.Tiles, regions)
 	if bound {
-		c.reviewed = macPointReview{nonce: old.Nonce, point: [2]float64{x, y}, regions: mask | maskPoint, control: hit.control}
+		c.reviewed = macPointReview{nonce: old.Nonce, point: [2]float64{x, y}, regions: regions, control: hit.control}
 	} else if hit.control != 0 {
 		C.cu_ax_release(hit.control)
 	}
@@ -1597,7 +1681,24 @@ func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, toke
 	if checked == 0 {
 		return PointInspection{}, staleReason("probe_geometry_unverified", "could not verify the reviewed window geometry")
 	}
-	return PointInspection{InputBound: bound, Role: C.GoString(&hit.role[0]), WindowVerified: hit.member != 0, NonSensitiveVerified: hit.safe != 0, EditableVerified: hit.editable != 0, PointUnobscured: hit.visible != 0, PointTile: comparePointTile(old.Tiles, now.Tiles, [2]float64{x, y})}, nil
+	observation := PointInspection{InputBound: bound, Role: C.GoString(&hit.role[0]), WindowVerified: hit.member != 0, NonSensitiveVerified: hit.safe != 0, EditableVerified: hit.editable != 0, PointUnobscured: hit.visible != 0, PointTile: comparePointTile(old.Tiles, now.Tiles, [2]float64{x, y})}
+	if !bound {
+		switch {
+		case observation.Role == "AXGroup" || observation.Role == "AXWebArea":
+			observation.Note = "container_only: the application did not expose a verifiable editable control at this point; do not retry this point"
+		case observation.Role == "":
+			observation.Note = "no_ax_hit: macOS returned no accessible control at this point"
+		case !observation.WindowVerified:
+			observation.Note = "not_verified_for_this_window: the hit could not be proven to belong to the authorized window"
+		case !observation.NonSensitiveVerified:
+			observation.Note = "sensitive_or_unknown: the hit may be a secure or unknown control and is never used for input"
+		case observation.Role == "AXTextField" || observation.Role == "AXTextArea":
+			observation.Note = "text_control_not_editable: a text role was found but it is not settable; verify whether the app exposes another field"
+		default:
+			observation.Note = "no_reviewable_control: the hit is not a supported non-sensitive control"
+		}
+	}
+	return observation, nil
 }
 
 // ClickFrame refuses unless the same window, frame geometry, focus, AX hit and

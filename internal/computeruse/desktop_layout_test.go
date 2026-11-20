@@ -3,6 +3,7 @@ package computeruse
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestDesktopLayoutRequiresLiveForegroundChoice(t *testing.T) {
@@ -20,5 +21,21 @@ func TestDesktopLayoutRequiresLiveForegroundChoice(t *testing.T) {
 	_ = d.beforeInput(2)
 	if d.finish(1, true) || !d.finish(2, false) || d.beforeInput(2) != nil || d.compact {
 		t.Fatal("keep-layout choice was not scoped to the current request")
+	}
+}
+
+func TestDesktopLayoutExpiresToKeep(t *testing.T) {
+	var d desktopChoice
+	if err := d.beforeInput(7); err == nil {
+		t.Fatal("first foreground input did not request a layout")
+	}
+	d.mu.Lock()
+	d.deadline = time.Now().Add(-time.Second)
+	d.mu.Unlock()
+	if !d.expire(7) || !d.allowed || d.compact {
+		t.Fatal("expired choice did not degrade to keeping the layout")
+	}
+	if err := d.beforeInput(7); err != nil {
+		t.Fatalf("expired choice still blocked input: %v", err)
 	}
 }
