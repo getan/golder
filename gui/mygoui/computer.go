@@ -296,9 +296,6 @@ func (a *App) startComputer(control bool) {
 			ctrl.ResetComputerRequest()
 			a.computerBackend = nil // ownership transferred to session
 			a.computerSession, a.computerPickerOpen = session, false
-			if layout, ok := any(session).(interface{ EnableDesktopLayout(uintptr) }); ok && control {
-				layout.EnableDesktopLayout(win.NativeHandle())
-			}
 			installComputerPauseItem(session)
 			a.clearComputerCandidate()
 			a.showComputerPanel()

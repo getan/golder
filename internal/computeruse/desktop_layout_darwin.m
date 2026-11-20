@@ -85,20 +85,17 @@ static GolderDesktopLayout *owner;
 - (void)failure:(NSString *)why {
     [self restore];
     ignorePreference=YES;
-    if (![self live] || host.attachedSheet) return;
-    if (!host.isVisible || !host.isOnActiveSpace || host.isMiniaturized) {
-        // No sheet can be shown. Authorize the non-moving path instead of
-        // leaving every foreground input blocked behind an invisible prompt.
-        golderDesktopChoice(key,1,ticket);
-        return;
-    }
+    // End the pending request first: a failed tiling attempt must never leave
+    // the request open, or the tick timer reopens the sheet. The alert below
+    // is informational only.
+    BOOL wasLive = [self live];
+    if (wasLive) golderDesktopChoice(key,1,ticket);
+    if (!wasLive || host.attachedSheet || !host.isVisible || !host.isOnActiveSpace || host.isMiniaturized) return;
     NSAlert *a = [[[NSAlert alloc] init] autorelease];
-    a.messageText=@"无法安全并排 / Layout unavailable";
+    a.messageText=@"无法并排 / Tiling unavailable";
     a.informativeText=why;
-    [a addButtonWithTitle:@"保持布局 / Keep layout"];
-    [a beginSheetModalForWindow:host completionHandler:^(NSModalResponse r){
-        if ([self live] && r==NSAlertFirstButtonReturn) golderDesktopChoice(key,1,ticket);
-    }];
+    [a addButtonWithTitle:@"好 / OK"];
+    [a beginSheetModalForWindow:host completionHandler:nil];
 }
 - (void)tile {
     if (![self live]) return;

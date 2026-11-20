@@ -1780,7 +1780,6 @@ func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, toke
 	} else if hit.control != 0 {
 		C.cu_ax_release(hit.control)
 	}
-	gate := c.layoutGate
 	c.mu.Unlock()
 	if err := c.Validate(ctx, target, false); err != nil {
 		return PointInspection{}, err
@@ -1810,22 +1809,6 @@ func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, toke
 		}
 		if observation.PointVerification == "" {
 			observation.PointVerification = "unverified"
-		}
-		if gate != nil && !isOperatorContext(ctx) {
-			// Inspection stays read-only. This only asks the person for the same
-			// layout/focus choice dispatch would request; after that choice the
-			// frame is stale, so the caller must observe again.
-			if bound {
-				c.mu.Lock()
-				c.clearPointReviewLocked()
-				c.mu.Unlock()
-				bound = false
-				observation.InputBound = false
-				observation.InputKind = ""
-			}
-			if err := gate(ctx); err != nil {
-				return PointInspection{}, err
-			}
 		}
 	}
 	return observation, nil
@@ -1961,14 +1944,6 @@ func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, tok
 		_, current, err := c.CaptureBound(ctx, target)
 		return current, err
 	}, func() (bool, error) {
-		c.mu.Lock()
-		gate := c.layoutGate
-		c.mu.Unlock()
-		if gate != nil && !isOperatorContext(ctx) {
-			if err := gate(ctx); err != nil {
-				return false, err
-			}
-		}
 		return prepareInputFocus(ctx, 2*time.Second, 100*time.Millisecond,
 			func() (bool, error) { return c.selectedFocus(ctx, target) },
 			func() error { return c.focusSelected(ctx, target) })
