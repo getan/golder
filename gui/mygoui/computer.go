@@ -296,6 +296,7 @@ func (a *App) startComputer(control bool) {
 			ctrl.ResetComputerRequest()
 			a.computerBackend = nil // ownership transferred to session
 			a.computerSession, a.computerPickerOpen = session, false
+			installComputerPauseItem(session)
 			a.clearComputerCandidate()
 			a.showComputerPanel()
 			if requested {

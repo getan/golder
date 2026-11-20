@@ -39,7 +39,7 @@ func autoInteractiveVerdict(ctx context.Context, opts ConsentOpts, mode permissi
 		}
 	} else {
 		switch args.Action {
-		case "status", "snapshot", "screenshot", "click", "click_at", "fill", "type_text", "press", "scroll", "close_window", "pause", "stop":
+		case "status", "snapshot", "screenshot", "inspect_point", "click", "click_at", "fill", "type_text", "press", "scroll", "close_window", "pause", "stop":
 		default:
 			return Verdict{}, false
 		}

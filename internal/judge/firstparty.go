@@ -198,7 +198,7 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 			return f.failClosed("computer has no action")
 		}
 		switch a.Action {
-		case "status", "snapshot", "screenshot", "pause", "stop":
+		case "status", "snapshot", "screenshot", "inspect_point", "pause", "stop":
 			return Verdict{Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
 				Reasons: []string{"observe or stop the current target-bound desktop session"}}
 		case "click", "click_at", "fill", "type_text", "press", "scroll", "close_window":

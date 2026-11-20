@@ -117,13 +117,14 @@ func (s *Session) capture(ctx context.Context, preview bool) (Frame, error) {
 			return err
 		}
 		frame = Frame{ID: hex.EncodeToString(nonce[:]), Width: cfg.Width, Height: cfg.Height, PNG: raw}
-		if (!preview || isOperatorContext(ctx)) && token != "" && len(token) <= 512 {
+		if (!preview || isOperatorContext(ctx)) && token != "" && len(token) <= 1024 {
 			s.mu.Lock()
 			if err := ctx.Err(); err != nil || !s.status.Active || (s.status.Paused && !isOperatorContext(ctx)) || s.status.Target.ID != target.ID {
 				s.mu.Unlock()
 				return ErrStaleObservation
 			}
-			if s.status.Capabilities.Control {
+			_, canInspect := backend.(pointInspector)
+			if s.status.Capabilities.Control || canInspect {
 				if s.frames == nil {
 					s.frames = make(map[string]frameLease)
 				}

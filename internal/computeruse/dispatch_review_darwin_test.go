@@ -28,7 +28,7 @@ func (b *reviewedFrameBackend) ClickFrame(_ context.Context, target Target, toke
 	return dispatchReviewedFrame(target, token, func() (string, error) { return token, nil },
 		func() (bool, error) { return b.focusChanged, b.focusErr },
 		func() error { b.finalChecks++; return b.finalErr },
-		func(macFrameBinding) error { b.called++; return nil })
+		func(macFrameBinding) error { b.called++; return nil }, 0)
 }
 
 func TestReviewedFrameRefusalThroughSession(t *testing.T) {
