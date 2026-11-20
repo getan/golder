@@ -137,22 +137,24 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 		return errorResult("computer: session unavailable"), nil
 	}
 	var args struct {
-		Action     string   `json:"action"`
-		SnapshotID string   `json:"snapshot_id"`
-		Ref        string   `json:"ref"`
-		FrameID    string   `json:"frame_id"`
-		ContextTiles []int `json:"context_tiles"`
-		X          *float64 `json:"x"`
-		Y          *float64 `json:"y"`
-		Key        string   `json:"key"`
-		DeltaX     int      `json:"delta_x"`
-		DeltaY     int      `json:"delta_y"`
-		Text       string   `json:"text"`
+		Action       string   `json:"action"`
+		SnapshotID   string   `json:"snapshot_id"`
+		Ref          string   `json:"ref"`
+		FrameID      string   `json:"frame_id"`
+		ContextTiles []int    `json:"context_tiles"`
+		X            *float64 `json:"x"`
+		Y            *float64 `json:"y"`
+		Key          string   `json:"key"`
+		DeltaX       int      `json:"delta_x"`
+		DeltaY       int      `json:"delta_y"`
+		Text         string   `json:"text"`
 	}
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return errorResult("computer: invalid arguments"), nil
 	}
-	if args.ContextTiles!=nil && args.Action!="inspect_point" { return errorResult("computer: context_tiles belongs to inspect_point"),nil }
+	if args.ContextTiles != nil && args.Action != "inspect_point" {
+		return errorResult("computer: context_tiles belongs to inspect_point"), nil
+	}
 	result := func(v any) (agentcore.AgentToolResult, error) {
 		data, err := json.Marshal(v)
 		if err != nil {
@@ -186,7 +188,7 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 		if args.X == nil || args.Y == nil || args.FrameID == "" || args.SnapshotID != "" || args.Ref != "" || args.Text != "" || args.Key != "" || args.DeltaX != 0 || args.DeltaY != 0 {
 			return errorResult("computer: inspect_point requires only frame_id, x and y"), nil
 		}
-		hit, err := t.Session.InspectPoint(ctx, args.FrameID, *args.X, *args.Y,args.ContextTiles...)
+		hit, err := t.Session.InspectPoint(ctx, args.FrameID, *args.X, *args.Y, args.ContextTiles...)
 		if err != nil {
 			return errorResult(fmt.Sprintf("computer: %v", err)), nil
 		}

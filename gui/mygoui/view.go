@@ -99,13 +99,21 @@ func (a *App) view(c *ui.Context) {
 			ui.Text(c, "Computer Use · "+status.Target.Application).Bold().Wrap()
 			if status.Paused {
 				ui.Text(c, "已暂停 / Paused")
-				if subtleButton(c, "交还 Agent / Resume").Clicked() { a.resumeComputer() }
+				if subtleButton(c, "交还 Agent / Resume").Clicked() {
+					a.resumeComputer()
+				}
 			} else {
 				ui.Text(c, "前台操作 / Foreground control")
-				if subtleButton(c, "暂停 / Pause").Clicked() { s.Pause() }
+				if subtleButton(c, "暂停 / Pause").Clicked() {
+					s.Pause()
+				}
 			}
-			if subtleButton(c, "接管 / Take over", a.status.Permission == "read-only").Clicked() { a.takeOverComputer() }
-			if subtleButton(c, "停止并恢复布局 / Stop").Clicked() { a.stopComputer() }
+			if subtleButton(c, "接管 / Take over", a.status.Permission == "read-only").Clicked() {
+				a.takeOverComputer()
+			}
+			if subtleButton(c, "停止并恢复布局 / Stop").Clicked() {
+				a.stopComputer()
+			}
 		})
 		return
 	}
