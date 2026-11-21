@@ -12,6 +12,7 @@ package computeruse
 #include <sys/proc_info.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <math.h>
@@ -211,10 +212,15 @@ typedef struct {
 	AXUIElementRef reviewed;
 	int coordinate;
 	double px, py;
+	char stage[48];
 } cu_cancel_flag;
 static cu_cancel_flag *cu_cancel_new(void) { return calloc(1, sizeof(cu_cancel_flag)); }
 static void cu_cancel_set(cu_cancel_flag *flag) { atomic_store(&flag->cancelled, 1); }
 static int cu_cancelled(cu_cancel_flag *flag) { return flag && atomic_load(&flag->cancelled); }
+// First failed native check wins; it never contains window or user content.
+static void cu_stage(cu_cancel_flag *flag, const char *stage) {
+	if (flag && stage && !flag->stage[0]) snprintf(flag->stage, sizeof(flag->stage), "%s", stage);
+}
 
 static int cu_ax_list_result(AXError error, int has_value, int is_array) {
 	if (error == kAXErrorAPIDisabled) return CU_AX_DISABLED;
@@ -1019,23 +1025,23 @@ static int cu_focused_control_safe(cu_window selected, AXUIElementRef window, cu
 }
 
 static int cu_press_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, uint16_t code, cu_cancel_flag *flag) {
-	if (!expected || cu_cancelled(flag) || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || bw <= 0 || bh <= 0) return 0;
+	if (!expected || cu_cancelled(flag) || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || bw <= 0 || bh <= 0) { cu_stage(flag, "press_args"); return 0; }
 	CGRect bounds;
-	if (!cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
+	if (!cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) { cu_stage(flag, "press_bounds"); return 0; }
 	AXUIElementRef window = cu_ax_window(selected, 1, flag);
-	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	if (!window || !CFEqual(window, expected)) { cu_stage(flag, "press_window"); if (window) CFRelease(window); return 0; }
 	CGPoint reviewedPoint = CGPointMake(bx + flag->px*bw, by + flag->py*bh);
 	int ok = (!flag->coordinate || cu_point_unobscured(selected, expected, reviewedPoint, flag)) && cu_focused_control_safe(selected, window, flag);
 	CFRelease(window);
-	if (!ok || cu_cancelled(flag)) return 0;
+	if (!ok || cu_cancelled(flag)) { cu_stage(flag, "press_focus"); return 0; }
 	window = cu_ax_window(selected, 1, flag);
-	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	if (!window || !CFEqual(window, expected)) { cu_stage(flag, "press_window2"); if (window) CFRelease(window); return 0; }
 	ok = (!flag->coordinate || cu_point_unobscured(selected, expected, reviewedPoint, flag)) && cu_focused_control_safe(selected, window, flag);
 	CFRelease(window);
-	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
+	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) { cu_stage(flag, "press_focus2"); return 0; }
 	CGEventRef down = CGEventCreateKeyboardEvent(NULL, code, true);
 	CGEventRef up = CGEventCreateKeyboardEvent(NULL, code, false);
-	if (!down || !up || cu_cancelled(flag)) { if (down) CFRelease(down); if (up) CFRelease(up); return 0; }
+	if (!down || !up || cu_cancelled(flag)) { cu_stage(flag, "press_event"); if (down) CFRelease(down); if (up) CFRelease(up); return 0; }
 	CGEventSetFlags(down, 0);
 	CGEventSetFlags(up, 0);
 	CGEventPostToPid(selected.pid, down);
@@ -1179,33 +1185,91 @@ static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElement
 	int field = element && AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role) == kAXErrorSuccess &&
 		role && CFEqual(role, CFSTR("AXTextField"));
 	if (role) CFRelease(role);
-	if (!field) return 0;
-	if (!keyboard) return cu_ax_invoke(selected, expected, element, kAXConfirmAction, flag);
-	AXUIElementRef window = cu_ax_window(selected, 1, flag);
-	int budget = 128;
-	int member = window && expected && CFEqual(window, expected) && cu_ax_contains(window, element, 0, &budget, flag);
-	if (window) CFRelease(window);
-	if (!member || cu_cancelled(flag)) return 0;
+	if (!field) { cu_stage(flag, "submit_role"); return 0; }
+	CGRect want;
+	if (!cu_ax_geometry(element, &want)) { cu_stage(flag, "submit_frame"); return 0; }
+	// Chromium may replace the input node when its suggestion popup opens.
+	// Reuse the app's focused field only when it occupies the same frame.
+	AXUIElementRef resolved = NULL;
+	AXUIElementRef target = element;
 	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
-	int focused = 0;
-	for (int i = 0; app && i < 12 && !focused && !cu_cancelled(flag); i++) {
-		CFTypeRef current = NULL;
-		focused = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &current) == kAXErrorSuccess &&
-			current && CFEqual(current, element);
-		if (current) CFRelease(current);
-		if (!focused && i == 0) {
-			Boolean settable = false;
-			if (cu_cancelled(flag) || AXUIElementIsAttributeSettable(element, kAXFocusedAttribute, &settable) != kAXErrorSuccess || !settable ||
-				AXUIElementSetAttributeValue(element, kAXFocusedAttribute, kCFBooleanTrue) != kAXErrorSuccess) break;
+	CFTypeRef focused = NULL;
+	if (app) {
+		AXUIElementSetMessagingTimeout(app, 0.5);
+		if (AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &focused) == kAXErrorSuccess && focused &&
+			CFGetTypeID(focused) == AXUIElementGetTypeID() && !CFEqual(focused, element)) {
+			CGRect got;
+			CFTypeRef frole = NULL;
+			if (cu_ax_geometry((AXUIElementRef)focused, &got) &&
+				fabs(got.origin.x-want.origin.x) <= 1 && fabs(got.origin.y-want.origin.y) <= 1 &&
+				fabs(got.size.width-want.size.width) <= 1 && fabs(got.size.height-want.size.height) <= 1 &&
+				AXUIElementCopyAttributeValue((AXUIElementRef)focused, kAXRoleAttribute, &frole) == kAXErrorSuccess &&
+				cu_ax_text_role(frole) && !cu_ax_read_block((AXUIElementRef)focused, frole)) {
+				resolved = (AXUIElementRef)CFRetain(focused);
+				target = resolved;
+			}
+			if (frole) CFRelease(frole);
 		}
-		if (!focused) usleep(25000);
+		if (focused) CFRelease(focused);
+		CFRelease(app);
 	}
-	if (app) CFRelease(app);
-	if (!focused || cu_cancelled(flag)) return -3; // no Return posted
-	CGRect b;
-	if (cu_cancelled(flag) || !cu_current_bounds(selected, &b)) return 0;
-	flag->reviewed = element; // cu_press_frame requires this exact focused control twice
-	return cu_press_frame(selected, expected, b.origin.x, b.origin.y, b.size.width, b.size.height, 36, flag);
+	int result = 0;
+	if (!keyboard) {
+		result = cu_ax_invoke(selected, expected, target, kAXConfirmAction, flag);
+		if (result == 0) cu_stage(flag, "submit_confirm");
+	} else {
+		AXUIElementRef window = cu_ax_window(selected, 1, flag);
+		int member = 0, budget = 128;
+		if (!window || !expected || !CFEqual(window, expected)) {
+			cu_stage(flag, "submit_window");
+		} else {
+			member = cu_ax_contains(window, target, 0, &budget, flag);
+			if (!member) cu_stage(flag, "submit_member");
+		}
+		if (window) CFRelease(window);
+		if (member && !cu_cancelled(flag)) {
+			AXUIElementRef currentApp = AXUIElementCreateApplication(selected.pid);
+			int focusedNow = 0;
+			for (int i = 0; currentApp && i < 12 && !focusedNow && !cu_cancelled(flag); i++) {
+				CFTypeRef current = NULL;
+				focusedNow = AXUIElementCopyAttributeValue(currentApp, kAXFocusedUIElementAttribute, &current) == kAXErrorSuccess &&
+					current && CFEqual(current, target);
+				if (current) CFRelease(current);
+				if (!focusedNow && i == 0 && resolved) break; // never focus an unsure web node
+				if (!focusedNow && i == 0) {
+					Boolean settable = false;
+					if (cu_cancelled(flag) || AXUIElementIsAttributeSettable(target, kAXFocusedAttribute, &settable) != kAXErrorSuccess || !settable ||
+						AXUIElementSetAttributeValue(target, kAXFocusedAttribute, kCFBooleanTrue) != kAXErrorSuccess) break;
+				}
+				if (!focusedNow) usleep(25000);
+			}
+			if (currentApp) CFRelease(currentApp);
+			if (!focusedNow) {
+				cu_stage(flag, "submit_focus");
+				result = -3; // no Return posted
+			} else {
+				CGRect b;
+				if (cu_cancelled(flag) || !cu_current_bounds(selected, &b)) {
+					cu_stage(flag, "submit_bounds");
+					result = 0;
+				} else {
+					flag->reviewed = target; // cu_press_frame requires this exact focused control twice
+					result = cu_press_frame(selected, expected, b.origin.x, b.origin.y, b.size.width, b.size.height, 36, flag);
+					// Focus can return to the operator between verification and the
+					// final frontmost check. Those stages prove no key was posted,
+					// so restore once and retry exactly that pre-send check.
+					if (result == 0 && (strcmp(flag->stage, "press_window") == 0 || strcmp(flag->stage, "press_window2") == 0) &&
+						!cu_cancelled(flag) && cu_focus_selected(selected, expected, flag, 0)) {
+						flag->stage[0] = 0;
+						result = cu_press_frame(selected, expected, b.origin.x, b.origin.y, b.size.width, b.size.height, 36, flag);
+					}
+					if (result == 0) cu_stage(flag, "submit_dispatch");
+				}
+			}
+		}
+	}
+	if (resolved) CFRelease(resolved);
+	return result;
 }
 
 static int cu_ax_close_window(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag) {
@@ -1714,6 +1778,7 @@ func (c *MacWindowCatalog) actNative(ctx context.Context, target Target, snapsho
 	if !stop() {
 		<-done
 	}
+	stage := C.GoString(&flag.stage[0])
 	C.free(unsafe.Pointer(flag))
 	if performed != -2 {
 		c.clearSnapshotLocked()
@@ -1732,7 +1797,7 @@ func (c *MacWindowCatalog) actNative(ctx context.Context, target Target, snapsho
 		return inputRefused(ctx, func() error { return c.Validate(ctx, target, false) }, staleReason("field_focus_unconfirmed", "the selected field did not acquire keyboard focus; Return was not sent"))
 	}
 	if performed == 0 {
-		return semanticInputRefused(ctx, func() error { return c.Validate(ctx, target, false) })
+		return semanticInputRefusedStage(ctx, func() error { return c.Validate(ctx, target, false) }, stage)
 	}
 	if performed < 0 {
 		return fmt.Errorf("%w: the accessibility action returned an error after dispatch; its effect is unknown and must not be replayed", ErrTargetLost)

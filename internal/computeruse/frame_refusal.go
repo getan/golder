@@ -35,5 +35,14 @@ func inputRefused(ctx context.Context, revalidate func() error, reason error) er
 // semanticInputRefused is used only when native pre-dispatch checks prove no
 // AX request was sent. A failed dispatched request must never use this path.
 func semanticInputRefused(ctx context.Context, revalidate func() error) error {
-	return inputRefused(ctx, revalidate, staleReason("control_not_supported", "no action was sent because the selected control could not be verified or does not support this action; observe again"))
+	return semanticInputRefusedStage(ctx, revalidate, "")
+}
+
+// Stage names only ever come from fixed native classifier labels.
+func semanticInputRefusedStage(ctx context.Context, revalidate func() error, stage string) error {
+	message := "no action was sent because the selected control could not be verified or does not support this action; observe again"
+	if stage != "" {
+		message = "no action was sent at the " + stage + " check; observe again"
+	}
+	return inputRefused(ctx, revalidate, staleReason("control_not_supported", message))
 }
