@@ -256,18 +256,31 @@ func (c *MacWindowCatalog) openApplication(ctx context.Context, app Application,
 		}
 		return nil
 	}
-	// Some Electron apps activate themselves during startup. Restore the app
-	// that was frontmost before the launch, as Cua's focus guard does.
-	if previous > 0 {
-		time.Sleep(250 * time.Millisecond)
+	// Some Electron apps activate themselves during startup and drag the
+	// active Space with them. Space changes are asynchronous, so re-assert the
+	// previous Space and frontmost app until the launch settles.
+	if previous > 0 || space != 0 {
 		bundle := C.CString(candidate.bundleID)
 		defer C.free(unsafe.Pointer(bundle))
-		if C.cu_frontmost_bundle_is(bundle) != 0 {
-			C.cu_activate_pid(previous)
+		stable := 0
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(150 * time.Millisecond)
+			if previous > 0 && C.cu_frontmost_bundle_is(bundle) != 0 {
+				C.cu_activate_pid(previous)
+			}
+			if space != 0 && C.cu_active_space() != space {
+				C.cu_restore_space(space)
+			}
+			if (space == 0 || C.cu_active_space() == space) && (previous == 0 || C.cu_frontmost_bundle_is(bundle) == 0) {
+				stable++
+				if stable >= 2 {
+					break
+				}
+			} else {
+				stable = 0
+			}
 		}
-	}
-	if space != 0 && C.cu_active_space() != space {
-		C.cu_restore_space(space)
 	}
 	return nil
 }
