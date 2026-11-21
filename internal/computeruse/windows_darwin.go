@@ -1080,6 +1080,29 @@ static int cu_key_target_safe(cu_window selected, AXUIElementRef window, cu_canc
 	return ok;
 }
 
+// Chromium may replace the input node when it gains focus, so identity is not
+// stable across the click. Accept a focused text control only at the same
+// on-screen frame.
+static int cu_focused_text_at(AXUIElementRef app, CGRect want, cu_cancel_flag *flag) {
+	if (!app) return 0;
+	CFTypeRef current = NULL;
+	if (AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &current) != kAXErrorSuccess || !current ||
+		CFGetTypeID(current) != AXUIElementGetTypeID()) {
+		if (current) CFRelease(current);
+		return 0;
+	}
+	CGRect got;
+	CFTypeRef role = NULL;
+	int ok = cu_ax_geometry((AXUIElementRef)current, &got) &&
+		fabs(got.origin.x-want.origin.x) <= 1 && fabs(got.origin.y-want.origin.y) <= 1 &&
+		fabs(got.size.width-want.size.width) <= 1 && fabs(got.size.height-want.size.height) <= 1 &&
+		AXUIElementCopyAttributeValue((AXUIElementRef)current, kAXRoleAttribute, &role) == kAXErrorSuccess &&
+		cu_ax_text_role(role) && !cu_ax_read_block((AXUIElementRef)current, role);
+	if (role) CFRelease(role);
+	CFRelease(current);
+	return ok;
+}
+
 // Cua's Chromium/macOS 27 recipe: move, an off-screen down/up to wake the
 // renderer's input route, then the real down/up at the target. Every event
 // carries the gesture phase, click group and window-routing fields.
@@ -1149,10 +1172,7 @@ static int cu_focus_field(cu_window selected, AXUIElementRef expected, AXUIEleme
 	int focused = 0;
 	if (app) AXUIElementSetMessagingTimeout(app, 0.5);
 	for (int i = 0; app && i < 12 && !focused && !cu_cancelled(flag); i++) {
-		CFTypeRef current = NULL;
-		focused = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &current) == kAXErrorSuccess &&
-			current && CFEqual(current, element);
-		if (current) CFRelease(current);
+		focused = cu_focused_text_at(app, frame, flag);
 		if (!focused) usleep(25000);
 	}
 	if (app) CFRelease(app);
@@ -1368,10 +1388,7 @@ static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElement
 			int focusedNow = 0;
 			if (currentApp) {
 				AXUIElementSetMessagingTimeout(currentApp, 0.5);
-				CFTypeRef current = NULL;
-				focusedNow = AXUIElementCopyAttributeValue(currentApp, kAXFocusedUIElementAttribute, &current) == kAXErrorSuccess &&
-					current && CFEqual(current, target);
-				if (current) CFRelease(current);
+				focusedNow = cu_focused_text_at(currentApp, want, flag);
 				CFRelease(currentApp);
 			}
 			if (!focusedNow && !cu_cancelled(flag)) focusedNow = cu_focus_field(selected, expected, target, flag);
@@ -1418,12 +1435,11 @@ static int cu_ax_replace(cu_window selected, AXUIElementRef expected, AXUIElemen
 	if (!member || cu_cancelled(flag)) { cu_stage(flag, "replace_member"); return 0; }
 	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
 	int focused = 0;
+	CGRect frame;
+	if (!cu_ax_geometry(element, &frame)) { if (app) CFRelease(app); cu_stage(flag, "replace_frame"); return 0; }
 	if (app) {
 		AXUIElementSetMessagingTimeout(app, 0.5);
-		CFTypeRef current = NULL;
-		focused = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &current) == kAXErrorSuccess &&
-			current && CFEqual(current, element);
-		if (current) CFRelease(current);
+		focused = cu_focused_text_at(app, frame, flag);
 		CFRelease(app);
 	}
 	if (!focused && !cu_cancelled(flag)) focused = cu_focus_field(selected, expected, element, flag);
