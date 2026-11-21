@@ -97,7 +97,7 @@ func TestSemanticGuardRejectsSecureDisabledAndNonEditableNodes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := s.Act(ctx, snapshot.ID, "@e1", tc.action, ""); !errors.Is(err, ErrNotAllowed) || backend.called != 0 {
+			if err := s.Act(ctx, snapshot.ID, "@e1", tc.action, ""); !errors.Is(err, ErrNotAllowed) || !errors.Is(err, ErrNoInput) || backend.called != 0 {
 				t.Fatalf("unsafe action: err=%v backend calls=%d", err, backend.called)
 			}
 		})

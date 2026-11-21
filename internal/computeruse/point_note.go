@@ -11,6 +11,8 @@ func pointInspectionNote(observation PointInspection) string {
 		return "no_ax_hit: macOS returned no accessible control at this point"
 	case !observation.WindowVerified:
 		return "not_verified_for_this_window: the hit could not be proven to belong to the authorized window"
+	case observation.ControlBlock != "" && observation.PointUnobscured:
+		return observation.ControlBlock + ": window and point verified; changing focus cannot establish the missing control evidence. Use another verified control or report this limitation."
 	case !observation.NonSensitiveVerified:
 		return "sensitive_or_unknown: the hit may be a secure or unknown control and is never used for input"
 	case observation.Role == "AXGroup" || observation.Role == "AXWebArea":

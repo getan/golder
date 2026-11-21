@@ -268,10 +268,11 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 		if args.Action == "close_window" {
 			return result(map[string]any{"dispatched": true, "verified": false, "paused": t.Session.Status().Paused, "message": "Close requested once for the selected window only. Inspect that same window to verify the result; do not repeat the close. A different window or save prompt outside the selected target requires local resolution."})
 		}
-		if args.Action == "click_at" || args.Action == "press" || args.Action == "scroll" || args.Action == "type_text" {
-			return result(map[string]any{"dispatched": true, "verified": false, "action": args.Action, "message": "Input was dispatched; observe the target to verify its effect."})
+		message := "Input was dispatched. Observe the same window to verify the intended effect; do not replay an unknown outcome."
+		if args.Action == "fill" || args.Action == "type_text" {
+			message += " Confirm visible text before submitting. An AX value echo alone does not confirm an edit in web content."
 		}
-		return result(map[string]any{"ok": true, "action": args.Action})
+		return result(map[string]any{"ok": true, "dispatched": true, "verified": false, "effect": "unverified", "action": args.Action, "message": message})
 	default:
 		return errorResult("computer: action unavailable or not authorized"), nil
 	}

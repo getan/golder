@@ -59,9 +59,9 @@ func (s *Session) Observe(ctx context.Context) (Snapshot, error) {
 		}
 		result = BoundedSnapshot(hex.EncodeToString(nonce[:]), elements)
 		result.Truncated = result.Truncated || truncated
-		if source, ok := backend.(interface{ snapshotAXHint(string) string }); ok {
-			if hint := source.snapshotAXHint(backendID); hint != "" {
-				result.AX = &AXTreeStatus{ManualAccessibility: hint}
+		if source, ok := backend.(interface{ snapshotAXStatus(string) AXTreeStatus }); ok {
+			if status := source.snapshotAXStatus(backendID); status.ManualAccessibility != "" {
+				result.AX = &status
 			}
 		}
 		refs := make(map[string]Element, len(result.Elements))
@@ -129,7 +129,7 @@ func (s *Session) Act(ctx context.Context, snapshotID, ref, action, text string)
 		s.snapshot = nil
 		s.mu.Unlock()
 		if element.Secure || !element.Enabled || (action == "fill" && !element.Editable) {
-			return ErrNotAllowed
+			return noInputError(ErrNotAllowed)
 		}
 		if err := ctx.Err(); err != nil {
 			return err

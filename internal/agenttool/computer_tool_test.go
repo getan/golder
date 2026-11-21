@@ -136,6 +136,10 @@ func TestComputerToolControlsSelectedTargetWithoutPerActionConfirmation(t *testi
 	if err != nil || result.IsError || backend.calls != 1 {
 		t.Fatalf("control call: result=%+v calls=%d err=%v", result, backend.calls, err)
 	}
+	text := agentcore.ContentToText(result.Content)
+	if !strings.Contains(text, `"dispatched":true`) || !strings.Contains(text, `"verified":false`) {
+		t.Fatalf("semantic dispatch is not confirmation of effect: %s", text)
+	}
 	result, err = tool.Execute(context.Background(), "one", raw, nil)
 	if err != nil || !result.IsError || backend.calls != 1 {
 		t.Fatalf("stale call: result=%+v calls=%d err=%v", result, backend.calls, err)

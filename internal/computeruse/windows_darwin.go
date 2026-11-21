@@ -11,6 +11,7 @@ package computeruse
 #include <libproc.h>
 #include <sys/proc_info.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <math.h>
@@ -516,21 +517,24 @@ static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, in
 // application is asked through AXManualAccessibility. This is only a hint:
 // failures are ignored, and every identity, focus and occlusion check remains
 // mandatory before any semantic or coordinate action.
-static AXError cu_ax_request_manual_accessibility(pid_t pid, cu_cancel_flag *flag) {
+static AXError cu_ax_request_manual_accessibility(pid_t pid, int electron, cu_cancel_flag *flag) {
 	if (cu_cancelled(flag)) return kAXErrorCannotComplete;
 	AXUIElementRef app = AXUIElementCreateApplication(pid);
 	if (!app) return kAXErrorCannotComplete;
 	AXUIElementSetMessagingTimeout(app, 0.3);
 	AXError result = AXUIElementSetAttributeValue(app, CFSTR("AXManualAccessibility"), kCFBooleanTrue);
+	if (electron && result == kAXErrorAttributeUnsupported && !cu_cancelled(flag)) {
+		result = AXUIElementSetAttributeValue(app, CFSTR("AXEnhancedUserInterface"), kCFBooleanTrue);
+	}
 	CFRelease(app);
 	return result;
 }
 
-static int cu_ax_collect_window(cu_window selected, AXUIElementRef expected, cu_ax_node *nodes, int cap, int *truncated, int *hint, cu_ax_diagnostic *diag, cu_cancel_flag *flag) {
+static int cu_ax_collect_window(cu_window selected, AXUIElementRef expected, cu_ax_node *nodes, int cap, int *truncated, int *hint, int electron, cu_ax_diagnostic *diag, cu_cancel_flag *flag) {
 	AXUIElementRef window = cu_ax_window_diagnostic_cancel(selected, 0, diag, flag);
 	if (!window) return -1;
 	if (!expected || !CFEqual(window, expected)) { CFRelease(window); diag->reason = CU_AX_WINDOW; return -1; }
-	*hint = cu_ax_request_manual_accessibility(selected.pid, flag);
+	if (hint) *hint = cu_ax_request_manual_accessibility(selected.pid, electron, flag);
 	int count = 0;
 	cu_ax_collect(window, nodes, cap, &count, 0, 0, truncated, flag);
 	CFRelease(window);
@@ -777,7 +781,7 @@ static int cu_frame_bounds_match(cu_window selected, double x, double y, double 
 	return 0;
 }
 
-typedef struct { int member, safe, editable, visible, tiles, verdict; char role[32]; AXUIElementRef control; } cu_probe;
+typedef struct { int member, safe, editable, visible, tiles, verdict; char role[32], block[48]; AXUIElementRef control; } cu_probe;
 
 // 4x4 tiles, row-major. A reviewed control can span several tiles; region
 // comparison must cover every one of them rather than trusting a model mask.
@@ -873,7 +877,12 @@ static int cu_probe_point(cu_window selected, AXUIElementRef expected, CGRect bo
 		CFTypeRef role=NULL, sub=NULL;
 		AXUIElementCopyAttributeValue(node,kAXRoleAttribute,&role);
 		AXUIElementCopyAttributeValue(node,kAXSubroleAttribute,&sub);
-		safe &= !cu_ax_secure_or_unknown(role,sub);
+		if (safe && cu_ax_secure_or_unknown(role,sub)) {
+			safe = 0;
+			const char *reason = (!role || CFGetTypeID(role) != CFStringGetTypeID()) ? "role_unreadable" :
+				(cu_ax_text_role(role) && (!sub || CFGetTypeID(sub) != CFStringGetTypeID())) ? "text_subrole_unreadable" : "secure_field";
+			snprintf(out->block, sizeof(out->block), "%s_%s", i ? "ancestor" : "control", reason);
+		}
 		if (i==0 && role && CFGetTypeID(role)==CFStringGetTypeID()) {
 			text=cu_ax_text_role(role);
 			if (CFEqual(role,CFSTR("AXTextField"))) label="AXTextField";
@@ -1197,6 +1206,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime/cgo"
 	"strings"
 	"sync"
@@ -1215,7 +1225,8 @@ type MacWindowCatalog struct {
 	refs         map[string]C.AXUIElementRef
 	snapshotID   string
 	snapshotFor  string
-	snapshotHint string
+	snapshotAX   AXTreeStatus
+	axInit       axEnablement
 	layoutGate   func(context.Context) error
 	reviewed     macPointReview // at most one retained control per catalog, never exposed to the model
 	closed       bool
@@ -1494,9 +1505,53 @@ func (c *MacWindowCatalog) Snapshot(ctx context.Context, target Target) (string,
 	}
 	done := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
-	var truncated, hint C.int
+	var truncated C.int
 	var diagnostic C.cu_ax_diagnostic
-	count := int(C.cu_ax_collect_window(window, c.pinned[target.ID], buffer, cap, &truncated, &hint, &diagnostic, flag))
+	stamp := axProcess{int32(window.pid), uint64(window.start_sec), uint64(window.start_usec)}
+	request := c.axInit.needsRequest(stamp, time.Now())
+	var hint C.int
+	var hintPtr *C.int
+	if request {
+		hintPtr = &hint
+		bundle := C.GoString(&window.bundle[0])
+		info, err := os.Stat(filepath.Join(bundle, "Contents", "Frameworks", "Electron Framework.framework"))
+		c.axInit = axEnablement{process: stamp, electron: err == nil && info.IsDir()}
+	}
+	var electron C.int
+	if c.axInit.electron {
+		electron = 1
+	}
+	collect := func(h *C.int) int {
+		return int(C.cu_ax_collect_window(window, c.pinned[target.ID], buffer, cap, &truncated, h, electron, &diagnostic, flag))
+	}
+	count := collect(hintPtr)
+	if count >= 0 && request && ctx.Err() == nil {
+		switch hint {
+		case C.kAXErrorSuccess:
+			c.axInit.hint = "accepted"
+		case C.kAXErrorAttributeUnsupported, C.kAXErrorNotImplemented:
+			c.axInit.hint = "unsupported"
+		default:
+			c.axInit.hint = "not_accepted"
+			c.axInit.retry = time.Now().Add(3 * time.Second)
+		}
+		// Only resample a sparse Electron tree, once per enablement attempt.
+		// Drop the first pass's retained handles and cached strings before reuse.
+		if electron != 0 && count <= 16 && truncated == 0 && c.axInit.hint != "unsupported" {
+			nodes := unsafe.Slice(buffer, count)
+			ready := false
+			for i := range nodes {
+				ready = ready || nodes[i].editable != 0 || C.GoString(&nodes[i].role[0]) == "AXWebArea"
+			}
+			if !ready && waitForAXRefresh(ctx, 400*time.Millisecond) {
+				for i := range nodes {
+					C.cu_ax_release(nodes[i].element)
+				}
+				clear(unsafe.Slice(buffer, cap))
+				count = collect(nil)
+			}
+		}
+	}
 	if !stop() {
 		<-done
 	}
@@ -1529,24 +1584,17 @@ func (c *MacWindowCatalog) Snapshot(ctx context.Context, target Target) (string,
 		return "", nil, false, err
 	}
 	c.refs, c.snapshotID, c.snapshotFor = refs, hex.EncodeToString(nonce[:]), target.ID
-	switch hint {
-	case C.kAXErrorSuccess:
-		c.snapshotHint = "accepted"
-	case C.kAXErrorAttributeUnsupported, C.kAXErrorNotImplemented:
-		c.snapshotHint = "unsupported"
-	default:
-		c.snapshotHint = "not_accepted"
-	}
+	c.snapshotAX = AXTreeStatus{ManualAccessibility: c.axInit.hint, WebContent: observedWebContent(c.axInit.electron, elements, truncated != 0)}
 	return c.snapshotID, elements, truncated != 0, nil
 }
 
-func (c *MacWindowCatalog) snapshotAXHint(id string) string {
+func (c *MacWindowCatalog) snapshotAXStatus(id string) AXTreeStatus {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if id == "" || c.snapshotID != id {
-		return ""
+		return AXTreeStatus{}
 	}
-	return c.snapshotHint
+	return c.snapshotAX
 }
 
 func (*MacWindowCatalog) SupportsAction(action string) bool {
@@ -1803,6 +1851,9 @@ func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, toke
 	}
 	verification := C.GoString(C.cu_point_verdict_name(hit.verdict))
 	observation := PointInspection{InputBound: bound, InputKind: kind, Role: role, WindowVerified: hit.member != 0, NonSensitiveVerified: hit.safe != 0, EditableVerified: hit.editable != 0, PointUnobscured: hit.visible != 0, PointVerification: verification, PointTile: comparePointTile(old.Tiles, now.Tiles, [2]float64{x, y})}
+	if observation.WindowVerified {
+		observation.ControlBlock = C.GoString(&hit.block[0])
+	}
 	if coordinate {
 		observation.Note = "coordinate_fallback: no verifiable AX control; graphical click, typing or key input is allowed at this point after the native checks. Verify the visible action context before sending; typed text and key presses cannot be verified by AX."
 	} else if !bound {

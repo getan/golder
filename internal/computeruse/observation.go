@@ -41,6 +41,7 @@ type Snapshot struct {
 // hint does not imply a complete tree, a send button, or permission to type.
 type AXTreeStatus struct {
 	ManualAccessibility string `json:"manual_accessibility"`
+	WebContent          string `json:"web_content,omitempty"`
 	EditableObserved    bool   `json:"enabled_nonsecure_editable_observed"`
 }
 

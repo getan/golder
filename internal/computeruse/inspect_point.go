@@ -13,6 +13,7 @@ type PointInspection struct {
 	Role                 string `json:"role,omitempty"`
 	WindowVerified       bool   `json:"window_verified"`
 	NonSensitiveVerified bool   `json:"non_sensitive_verified"`
+	ControlBlock         string `json:"control_block,omitempty"`
 	EditableVerified     bool   `json:"editable_verified"`
 	PointUnobscured      bool   `json:"point_unobscured"`
 	PointVerification    string `json:"point_verification,omitempty"`
