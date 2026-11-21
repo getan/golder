@@ -1161,8 +1161,19 @@ static int cu_focus_field(cu_window selected, AXUIElementRef expected, AXUIEleme
 	AXUIElementRef window = cu_ax_window(selected, 0, flag);
 	int budget = 128;
 	int member = window && expected && CFEqual(window, expected) && cu_ax_contains(window, element, 0, &budget, flag);
+	if (member && window) {
+		// Make the exact window AppKit-key without activating the application.
+		// Background clicks are otherwise ignored for focus by Chromium.
+		AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
+		if (app) {
+			AXUIElementSetMessagingTimeout(app, 0.5);
+			AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute, window);
+			CFRelease(app);
+		}
+	}
 	if (window) CFRelease(window);
 	if (!member || cu_cancelled(flag)) { cu_stage(flag, "focus_member"); return 0; }
+	usleep(50000);
 	CGRect bounds;
 	if (!cu_current_bounds(selected, &bounds)) { cu_stage(flag, "focus_bounds"); return 0; }
 	CGPoint center = CGPointMake(frame.origin.x + frame.size.width/2, frame.origin.y + frame.size.height/2);
