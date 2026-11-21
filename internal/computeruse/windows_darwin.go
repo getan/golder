@@ -1514,20 +1514,28 @@ static int cu_ax_replace(cu_window selected, AXUIElementRef expected, AXUIElemen
 	}
 	if (!focused && !cu_cancelled(flag)) focused = cu_focus_field(selected, expected, element, flag);
 	if (!focused || cu_cancelled(flag)) { cu_stage(flag, "replace_focus"); return -3; }
-	CGEventRef selectDown = CGEventCreateKeyboardEvent(NULL, 0, true);
-	CGEventRef selectUp = CGEventCreateKeyboardEvent(NULL, 0, false);
-	if (!selectDown || !selectUp || cu_cancelled(flag)) {
-		if (selectDown) CFRelease(selectDown);
-		if (selectUp) CFRelease(selectUp);
-		cu_stage(flag, "replace_select");
-		return 0;
+	// End, then bounded backspaces. Cmd+A is not reliably honored by this
+	// web input, while these keys clear any preceding content.
+	CGEventRef endDown = CGEventCreateKeyboardEvent(NULL, 119, true);
+	CGEventRef endUp = CGEventCreateKeyboardEvent(NULL, 119, false);
+	if (endDown && endUp) {
+		cu_post_key(selected.pid, endDown);
+		cu_post_key(selected.pid, endUp);
 	}
-	CGEventSetFlags(selectDown, kCGEventFlagMaskCommand);
-	CGEventSetFlags(selectUp, kCGEventFlagMaskCommand);
-	cu_post_key(selected.pid, selectDown);
-	cu_post_key(selected.pid, selectUp);
-	CFRelease(selectDown);
-	CFRelease(selectUp);
+	if (endDown) CFRelease(endDown);
+	if (endUp) CFRelease(endUp);
+	usleep(20000);
+	for (int i = 0; i < 64 && !cu_cancelled(flag); i++) {
+		CGEventRef down = CGEventCreateKeyboardEvent(NULL, 51, true);
+		CGEventRef up = CGEventCreateKeyboardEvent(NULL, 51, false);
+		if (!down || !up) { if (down) CFRelease(down); if (up) CFRelease(up); return -1; }
+		cu_post_key(selected.pid, down);
+		cu_post_key(selected.pid, up);
+		CFRelease(down);
+		CFRelease(up);
+		if ((i & 7) == 7) usleep(2000);
+	}
+	usleep(30000);
 	CFStringRef value = CFStringCreateWithBytes(NULL, (const UInt8 *)text, (CFIndex)length, kCFStringEncodingUTF8, false);
 	if (!value) return -1; // select-all was already sent
 	UniChar buffer[4096];
