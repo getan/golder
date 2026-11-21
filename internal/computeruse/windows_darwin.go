@@ -1128,7 +1128,7 @@ static int cu_type_text_frame(cu_window selected, AXUIElementRef expected, doubl
 	return sent;
 }
 
-static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementRef element, cu_cancel_flag *flag) {
+static int cu_ax_invoke(cu_window selected, AXUIElementRef expected, AXUIElementRef element, CFStringRef action, cu_cancel_flag *flag) {
 	if (!expected || !element || cu_cancelled(flag)) return 0;
 	// AXPress is addressed to the pinned element, not to the foreground app.
 	// Requiring focus would make an operator's own terminal pane steal focus
@@ -1145,10 +1145,11 @@ static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementR
 	if (enabled) CFRelease(enabled);
 	if (!allowed || cu_cancelled(flag)) return 0;
 	CFArrayRef actions = NULL;
-	allowed = AXUIElementCopyActionNames(element, &actions) == kAXErrorSuccess && actions &&
-		CFArrayContainsValue(actions, CFRangeMake(0, CFArrayGetCount(actions)), kAXPressAction);
+	int listed = AXUIElementCopyActionNames(element, &actions) == kAXErrorSuccess && actions;
+	allowed = listed && CFArrayContainsValue(actions, CFRangeMake(0, CFArrayGetCount(actions)), action);
 	if (actions) CFRelease(actions);
-	if (!allowed || cu_cancelled(flag)) return 0;
+	if (cu_cancelled(flag)) return 0;
+	if (!allowed) return listed ? -2 : 0; // proven absent vs. cannot inspect
 	window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	budget = 128;
@@ -1157,7 +1158,26 @@ static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementR
 	if (!found || cu_cancelled(flag)) return 0;
 	// A failed AX call may still have reached the application. Distinguish it
 	// from the checks above, which provably sent no action.
-	return AXUIElementPerformAction(element, kAXPressAction) == kAXErrorSuccess ? 1 : -1;
+	return AXUIElementPerformAction(element, action) == kAXErrorSuccess ? 1 : -1;
+}
+
+static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementRef element, cu_cancel_flag *flag) {
+	int rc = cu_ax_invoke(selected, expected, element, kAXPressAction, flag);
+	return rc == -2 ? 0 : rc;
+}
+
+static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElementRef element, cu_cancel_flag *flag) {
+	CFTypeRef role = NULL;
+	int field = element && AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role) == kAXErrorSuccess &&
+		role && CFEqual(role, CFSTR("AXTextField"));
+	if (role) CFRelease(role);
+	if (!field) return 0;
+	int rc = cu_ax_invoke(selected, expected, element, kAXConfirmAction, flag);
+	if (rc != -2) return rc; // never try Return after any attempted AXConfirm
+	CGRect b;
+	if (cu_cancelled(flag) || !cu_current_bounds(selected, &b)) return 0;
+	flag->reviewed = element; // cu_press_frame requires this exact focused control twice
+	return cu_press_frame(selected, expected, b.origin.x, b.origin.y, b.size.width, b.size.height, 36, flag);
 }
 
 static int cu_ax_close_window(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag) {
@@ -1608,14 +1628,14 @@ func (c *MacWindowCatalog) snapshotAXStatus(id string) AXTreeStatus {
 }
 
 func (*MacWindowCatalog) SupportsAction(action string) bool {
-	return action == "click" || action == "fill"
+	return action == "click" || action == "fill" || action == "submit"
 }
 
 // Act executes a targeted AXPress or non-secure AXValue replacement on a node
 // from the bound backend snapshot. Target and membership are rechecked before
 // the OS request; cancellation cannot undo an already-sent action.
 func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, ref, action, text string) error {
-	if (action != "click" && action != "fill") || (action == "click" && text != "") || len(text) > 4096 || !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') {
+	if !c.SupportsAction(action) || (action != "fill" && text != "") || len(text) > 4096 || !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') {
 		return ErrNotAllowed
 	}
 	if err := c.Validate(ctx, target, true); err != nil {
@@ -1642,6 +1662,8 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 	var performed C.int
 	if action == "click" {
 		performed = C.cu_ax_press(window, c.pinned[target.ID], element, flag)
+	} else if action == "submit" {
+		performed = C.cu_ax_submit(window, c.pinned[target.ID], element, flag)
 	} else {
 		value := C.CString(text)
 		performed = C.cu_ax_fill(window, c.pinned[target.ID], element, value, C.size_t(len(text)), flag)
