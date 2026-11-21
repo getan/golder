@@ -226,14 +226,33 @@ static void cu_stage(cu_cancel_flag *flag, const char *stage) {
 // SkyLight's per-pid post takes the IOHID path that Chromium accepts; the
 // public CGEventPostToPid is ignored as dead input by Chromium/Electron.
 typedef void (*cu_sl_post_fn)(pid_t, CGEventRef);
-static cu_sl_post_fn cu_sl_post(void) {
-	static cu_sl_post_fn fn;
+static void *cu_skylight(void) {
+	static void *handle;
 	static int tried;
 	if (!tried) {
 		tried = 1;
-		void *h = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
-		if (h) fn = (cu_sl_post_fn)dlsym(h, "SLEventPostToPid");
+		handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
 	}
+	return handle;
+}
+static cu_sl_post_fn cu_sl_post(void) {
+	static cu_sl_post_fn fn;
+	void *h = cu_skylight();
+	if (!fn && h) fn = (cu_sl_post_fn)dlsym(h, "SLEventPostToPid");
+	return fn;
+}
+typedef void (*cu_set_window_location_fn)(CGEventRef, double, double);
+typedef void (*cu_set_int_field_fn)(CGEventRef, uint32_t, int64_t);
+static cu_set_window_location_fn cu_set_window_location(void) {
+	static cu_set_window_location_fn fn;
+	void *h = cu_skylight();
+	if (!fn && h) fn = (cu_set_window_location_fn)dlsym(h, "CGEventSetWindowLocation");
+	return fn;
+}
+static cu_set_int_field_fn cu_set_int_field(void) {
+	static cu_set_int_field_fn fn;
+	void *h = cu_skylight();
+	if (!fn && h) fn = (cu_set_int_field_fn)dlsym(h, "SLEventSetIntegerValueField");
 	return fn;
 }
 static void cu_post_key(pid_t pid, CGEventRef event) {
@@ -1072,14 +1091,40 @@ static int cu_focus_field(cu_window selected, AXUIElementRef expected, AXUIEleme
 	int member = window && expected && CFEqual(window, expected) && cu_ax_contains(window, element, 0, &budget, flag);
 	if (window) CFRelease(window);
 	if (!member || cu_cancelled(flag)) { cu_stage(flag, "focus_member"); return 0; }
+	CGRect bounds;
+	if (!cu_current_bounds(selected, &bounds)) { cu_stage(flag, "focus_bounds"); return 0; }
 	CGPoint center = CGPointMake(frame.origin.x + frame.size.width/2, frame.origin.y + frame.size.height/2);
+	CGPoint local = CGPointMake(center.x - bounds.origin.x, center.y - bounds.origin.y);
+	cu_set_window_location_fn setloc = cu_set_window_location();
+	cu_set_int_field_fn setint = cu_set_int_field();
+	if (!setloc || !setint) { cu_stage(flag, "focus_spi"); return 0; }
+	// A background AppKit/Chromium window needs a move at the target before
+	// the click so its cursor tracking is not stale.
+	CGEventRef move = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, center, 0);
+	if (move) {
+		setloc(move, local.x, local.y);
+		setint(move, 40, selected.pid);
+		setint(move, 51, selected.window_id);
+		setint(move, 91, selected.window_id);
+		setint(move, 92, selected.window_id);
+		cu_post_key(selected.pid, move);
+		CFRelease(move);
+		usleep(15000);
+	}
 	CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, center, kCGMouseButtonLeft);
 	CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, center, kCGMouseButtonLeft);
 	if (!down || !up || cu_cancelled(flag)) { if (down) CFRelease(down); if (up) CFRelease(up); cu_stage(flag, "focus_event"); return 0; }
-	CGEventSetIntegerValueField(down, kCGMouseEventClickState, 1);
-	CGEventSetIntegerValueField(up, kCGMouseEventClickState, 1);
-	CGEventSetFlags(down, 0);
-	CGEventSetFlags(up, 0);
+	for (int i = 0; i < 2; i++) {
+		CGEventRef event = i == 0 ? down : up;
+		setloc(event, local.x, local.y);
+		setint(event, 1, 1); // kCGMouseEventClickState
+		setint(event, 3, 0); // kCGMouseEventButtonNumber (left)
+		setint(event, 7, 0); // kCGMouseEventSubtype
+		setint(event, 40, selected.pid);
+		setint(event, 51, selected.window_id);
+		setint(event, 91, selected.window_id);
+		setint(event, 92, selected.window_id);
+	}
 	cu_post_key(selected.pid, down);
 	cu_post_key(selected.pid, up);
 	CFRelease(down);
