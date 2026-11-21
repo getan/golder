@@ -441,6 +441,7 @@ static AXUIElementRef cu_ax_window(cu_window selected, int require_focus, cu_can
 typedef struct {
 	AXUIElementRef element;
 	char role[128];
+	char block[48];
 	char name[512];
 	char value[512];
 	int enabled;
@@ -455,13 +456,17 @@ static int cu_ax_text_role(CFTypeRef role) {
 
 // A text control without a readable subrole cannot be distinguished from a
 // secure field, and an element without a readable role cannot be classified.
-static int cu_ax_secure_or_unknown(CFTypeRef role, CFTypeRef subrole) {
-	if (!role || CFGetTypeID(role) != CFStringGetTypeID()) return 1;
-	if (CFEqual(role, CFSTR("AXSecureTextField"))) return 1;
+static const char *cu_ax_block_reason(CFTypeRef role, CFTypeRef subrole) {
+	if (!role || CFGetTypeID(role) != CFStringGetTypeID()) return "role_unreadable";
+	if (CFEqual(role, CFSTR("AXSecureTextField"))) return "secure_field";
 	if (subrole && CFGetTypeID(subrole) == CFStringGetTypeID()) {
-		return CFEqual(subrole, CFSTR("AXSecureTextField"));
+		return CFEqual(subrole, CFSTR("AXSecureTextField")) ? "secure_field" : NULL;
 	}
-	return cu_ax_text_role(role);
+	return cu_ax_text_role(role) ? "text_subrole_unreadable" : NULL;
+}
+
+static int cu_ax_secure_or_unknown(CFTypeRef role, CFTypeRef subrole) {
+	return cu_ax_block_reason(role, subrole) != NULL;
 }
 
 static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, int *count, int depth, int ancestor_secure, int *truncated, cu_cancel_flag *flag) {
@@ -470,10 +475,12 @@ static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, in
 	CFTypeRef role = NULL, subrole = NULL, title = NULL, enabled = NULL, value = NULL;
 	AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role);
 	AXUIElementCopyAttributeValue(element, kAXSubroleAttribute, &subrole);
-	int secure = ancestor_secure || cu_ax_secure_or_unknown(role, subrole);
+	const char *reason = cu_ax_block_reason(role, subrole);
+	int secure = ancestor_secure || reason != NULL;
 	cu_ax_node *node = &nodes[(*count)++];
 	node->element = (AXUIElementRef)CFRetain(element);
 	node->secure = secure;
+	if (reason) snprintf(node->block, sizeof(node->block), "control_%s", reason);
 	cu_string(role, node->role, sizeof(node->role));
 	if (!secure) {
 		if (AXUIElementCopyAttributeValue(element, kAXTitleAttribute, &title) != kAXErrorSuccess || !title) {
@@ -877,10 +884,9 @@ static int cu_probe_point(cu_window selected, AXUIElementRef expected, CGRect bo
 		CFTypeRef role=NULL, sub=NULL;
 		AXUIElementCopyAttributeValue(node,kAXRoleAttribute,&role);
 		AXUIElementCopyAttributeValue(node,kAXSubroleAttribute,&sub);
-		if (safe && cu_ax_secure_or_unknown(role,sub)) {
+		const char *reason = cu_ax_block_reason(role, sub);
+		if (safe && reason) {
 			safe = 0;
-			const char *reason = (!role || CFGetTypeID(role) != CFStringGetTypeID()) ? "role_unreadable" :
-				(cu_ax_text_role(role) && (!sub || CFGetTypeID(sub) != CFStringGetTypeID())) ? "text_subrole_unreadable" : "secure_field";
 			snprintf(out->block, sizeof(out->block), "%s_%s", i ? "ancestor" : "control", reason);
 		}
 		if (i==0 && role && CFGetTypeID(role)==CFStringGetTypeID()) {
@@ -1568,7 +1574,7 @@ func (c *MacWindowCatalog) Snapshot(ctx context.Context, target Target) (string,
 	for i := range nodes {
 		ref := fmt.Sprintf("@e%d", i+1)
 		refs[ref] = nodes[i].element
-		elements = append(elements, Element{Ref: ref, Role: C.GoString(&nodes[i].role[0]), Name: C.GoString(&nodes[i].name[0]), Value: C.GoString(&nodes[i].value[0]), Enabled: nodes[i].enabled != 0, Editable: nodes[i].editable != 0, Secure: nodes[i].secure != 0})
+		elements = append(elements, Element{Ref: ref, Role: C.GoString(&nodes[i].role[0]), Name: C.GoString(&nodes[i].name[0]), Value: C.GoString(&nodes[i].value[0]), Enabled: nodes[i].enabled != 0, Editable: nodes[i].editable != 0, Secure: nodes[i].secure != 0, ControlBlock: C.GoString(&nodes[i].block[0])})
 	}
 	if err := ctx.Err(); err != nil {
 		for _, ref := range refs {
@@ -2143,6 +2149,40 @@ func (c *MacWindowCatalog) restoreSelected(ctx context.Context, target Target, a
 	var raised C.int
 	if targeted {
 		raised = C.cu_raise_pinned(window, c.pinned[target.ID], flag)
+		if raised != 0 {
+			// WindowServer need not publish the new stacking order before
+			// AXRaise returns. Poll the guard, not the activation operation.
+			err := afterPinnedRaise(ctx, 400*time.Millisecond, 50*time.Millisecond, func() (bool, error) {
+				switch C.cu_selected_focus(window, c.pinned[target.ID], flag) {
+				case -1:
+					return false, ErrStaleObservation
+				case 1:
+					return true, nil
+				}
+				reason = C.cu_activation_reason(window, 0)
+				switch reason {
+				case C.CU_FOCUS_NOT_VISIBLE, C.CU_FOCUS_OFFSCREEN_PEER:
+					return false, nil
+				case C.CU_FOCUS_SAFE:
+					// Revalidates the guard and the retained AX identity before activation.
+					raised = C.cu_focus_selected(window, c.pinned[target.ID], flag, 0)
+					return true, nil
+				default:
+					return false, macActivationError(int(reason))
+				}
+			})
+			if err != nil {
+				if errors.Is(err, errRaiseNotVisible) {
+					err = macActivationError(int(reason))
+				}
+				if !stop() {
+					<-done
+				}
+				C.free(unsafe.Pointer(flag))
+				c.mu.Unlock()
+				return err
+			}
+		}
 	} else {
 		raised = C.cu_focus_selected(window, c.pinned[target.ID], flag, operator)
 	}

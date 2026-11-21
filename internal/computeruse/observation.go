@@ -21,13 +21,14 @@ const (
 // includes password controls and nodes whose safety cannot be established;
 // backends must never populate their Name or Value.
 type Element struct {
-	Ref      string `json:"ref"`
-	Role     string `json:"role"`
-	Name     string `json:"name,omitempty"`
-	Value    string `json:"value,omitempty"`
-	Enabled  bool   `json:"enabled"`
-	Editable bool   `json:"editable,omitempty"`
-	Secure   bool   `json:"secure,omitempty"`
+	Ref          string `json:"ref"`
+	Role         string `json:"role"`
+	Name         string `json:"name,omitempty"`
+	Value        string `json:"value,omitempty"`
+	Enabled      bool   `json:"enabled"`
+	Editable     bool   `json:"editable,omitempty"`
+	Secure       bool   `json:"secure,omitempty"`
+	ControlBlock string `json:"control_block,omitempty"`
 }
 
 type Snapshot struct {
@@ -66,6 +67,12 @@ func BoundedSnapshot(id string, elements []Element) Snapshot {
 		}
 		e.Role = boundedText(e.Role)
 		e.Name = boundedText(e.Name)
+		// Only fixed classifier labels, never accessibility-provided strings.
+		switch e.ControlBlock {
+		case "control_role_unreadable", "control_secure_field", "control_text_subrole_unreadable":
+		default:
+			e.ControlBlock = ""
+		}
 		if e.Secure {
 			e.Name = ""
 			e.Value = ""

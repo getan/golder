@@ -20,6 +20,19 @@ func TestBoundedSnapshotRedactsSecureValues(t *testing.T) {
 	}
 }
 
+func TestSnapshotControlBlockIsMetadataOnly(t *testing.T) {
+	for _, reason := range []string{"control_secure_field", "control_role_unreadable", "control_text_subrole_unreadable", "unexpected user content"} {
+		e := BoundedSnapshot("id", []Element{{Role: "AXTextField", Secure: true, Name: "label", Value: "value", ControlBlock: reason}}).Elements[0]
+		want := reason
+		if reason == "unexpected user content" {
+			want = ""
+		}
+		if !e.Secure || e.Value != "" || e.Name != "" || e.ControlBlock != want {
+			t.Fatalf("incorrect redaction or diagnostic for %q", reason)
+		}
+	}
+}
+
 func TestBoundedSnapshotBoundsEncodedPayload(t *testing.T) {
 	items := make([]Element, MaxSnapshotNodes)
 	for i := range items {
