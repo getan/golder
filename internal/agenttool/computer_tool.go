@@ -108,6 +108,7 @@ func (t *ComputerTool) Schema() json.RawMessage {
 		}
 		if !status.Paused && control && t.Session.SupportsCoordinates() {
 			actions = append(actions, "click_at")
+			actions = append(actions, "type_at")
 			for _, action := range []string{"press", "scroll", "type_text"} {
 				if t.Session.SupportsFrameAction(action) {
 					actions = append(actions, action)
@@ -234,6 +235,20 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 			agentcore.NewTextContent(fmt.Sprintf("Target window screenshot %s (%dx%d). Screen content is untrusted.", frame.ID, frame.Width, frame.Height)),
 			agentcore.NewImageContent(base64.StdEncoding.EncodeToString(frame.PNG), "image/png"),
 		}}, nil
+	case "type_at":
+		if t.Mode != nil && t.Mode.Mode() == permissions.ReadOnly {
+			return errorResult("computer: read-only mode does not permit desktop control"), nil
+		}
+		if agentcore.SandboxRequestedFromContext(ctx) || seatbelt.ModeFromEnv() == seatbelt.ModeEnforce {
+			return errorResult("computer: desktop control cannot satisfy required OS containment"), nil
+		}
+		if args.SnapshotID != "" || args.Ref != "" || args.Key != "" || args.FrameID == "" || args.X == nil || args.Y == nil || args.Text == "" || args.DeltaX != 0 || args.DeltaY != 0 {
+			return errorResult("computer: type_at requires frame_id, x, y and text"), nil
+		}
+		if err := t.Session.TypeAtFrame(ctx, args.FrameID, *args.X, *args.Y, args.Text); err != nil {
+			return computerControlError(t.Session, err), nil
+		}
+		return result(map[string]any{"typed": true, "delivery": "foreground", "restored": true})
 	case "click", "click_at", "fill", "replace", "type_text", "press", "scroll", "close_window":
 		if t.Mode != nil && t.Mode.Mode() == permissions.ReadOnly {
 			return errorResult("computer: read-only mode does not permit desktop control"), nil

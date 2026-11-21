@@ -26,6 +26,10 @@ int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *lengt
 int cu_stream_latest(int32_t pid, uint32_t windowID, double timeout, void **out, size_t *length, double *at, int *status, double *x, double *y, double *w, double *h, void *cancel);
 void cu_stream_stop_all(void);
 int cu_capture_window_skylight(uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h);
+int cu_activate_pid(int32_t pid);
+int cu_frontmost_pid(void);
+uint64_t cu_active_space(void);
+int cu_restore_space(uint64_t space);
 int cu_window_is_on_screen(uint32_t windowID, int32_t pid);
 int cu_app_allowed(int32_t pid);
 int cu_running_bundle(int32_t pid, char *out, size_t length);
@@ -1512,6 +1516,47 @@ static int cu_type_text_frame(cu_window selected, AXUIElementRef expected, doubl
 	return sent;
 }
 
+// Raw Unicode typing to one pid. Web contenteditable controls often have no AX
+// text element, so the semantic type path cannot address them; the click puts
+// the caret in place and these key events deliver the text to that pid.
+static int cu_type_unicode_raw(pid_t pid, const char *text, size_t length, cu_cancel_flag *flag) {
+	if (!text || length == 0 || length > 4096) return 0;
+	CFStringRef value = CFStringCreateWithBytes(NULL, (const UInt8 *)text, (CFIndex)length, kCFStringEncodingUTF8, false);
+	if (!value) return 0;
+	UniChar buffer[4096];
+	CFIndex total = CFStringGetLength(value);
+	if (total > 4096) { CFRelease(value); return 0; }
+	CFStringGetCharacters(value, CFRangeMake(0, total), buffer);
+	CFRelease(value);
+	for (CFIndex offset = 0; offset < total;) {
+		if (cu_cancelled(flag)) return -1;
+		CFIndex count = total-offset < 20 ? total-offset : 20;
+		if (offset+count < total && CFStringIsSurrogateHighCharacter(buffer[offset+count-1])) count--;
+		CGEventRef down = CGEventCreateKeyboardEvent(NULL, 0, true);
+		CGEventRef up = CGEventCreateKeyboardEvent(NULL, 0, false);
+		if (!down || !up) { if (down) CFRelease(down); if (up) CFRelease(up); return -1; }
+		CGEventSetFlags(down, 0);
+		CGEventSetFlags(up, 0);
+		CGEventKeyboardSetUnicodeString(down, count, buffer+offset);
+		CGEventKeyboardSetUnicodeString(up, count, buffer+offset);
+		cu_post_key(pid, down);
+		cu_post_key(pid, up);
+		CFRelease(down);
+		CFRelease(up);
+		offset += count;
+	}
+	return 1;
+}
+
+// One capture-bound pixel action: click the reviewed point, then type into the
+// focused field without requiring an AX text element.
+int cu_type_at_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, double nx, double ny, const char *text, size_t length, cu_cancel_flag *flag, int operator) {
+	if (cu_cancelled(flag)) return 0;
+	if (!cu_click_frame(selected, expected, bx, by, bw, bh, nx, ny, flag, operator)) return 0;
+	usleep(60000);
+	return cu_type_unicode_raw(selected.pid, text, length, flag);
+}
+
 static int cu_ax_invoke(cu_window selected, AXUIElementRef expected, AXUIElementRef element, CFStringRef action, cu_cancel_flag *flag) {
 	if (!expected || !element || cu_cancelled(flag)) return 0;
 	// AXPress is addressed to the pinned element, not to the foreground app.
@@ -2554,6 +2599,68 @@ func (c *MacWindowCatalog) TypeTextFrame(ctx context.Context, target Target, tok
 	return c.dispatchFrame(ctx, target, token, func(window C.cu_window, pinned C.AXUIElementRef, binding macFrameBinding, flag *C.cu_cancel_flag) C.int {
 		return C.cu_type_text_frame(window, pinned, C.double(binding.X), C.double(binding.Y), C.double(binding.W), C.double(binding.H), value, C.size_t(len(text)), flag, 0)
 	})
+}
+
+// TypeAtFrame brings only the exact target forward, clicks the captured point
+// and types there. It is the fallback for web contenteditable surfaces with no
+// AX text control; the previous Space and frontmost application are restored
+// afterwards.
+func (c *MacWindowCatalog) TypeAtFrame(ctx context.Context, target Target, token string, x, y float64, text string) error {
+	if !validFrameText(text) {
+		return noInputError(ErrNotAllowed)
+	}
+	if err := c.Validate(ctx, target, false); err != nil {
+		return err
+	}
+	var binding macFrameBinding
+	if json.Unmarshal([]byte(token), &binding) != nil || binding.Target != target.ID {
+		return noInputError(ErrStaleObservation)
+	}
+	c.mu.Lock()
+	window, ok := c.windows[target.ID]
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || !ok {
+		return noInputError(ErrTargetLost)
+	}
+	previous := C.cu_frontmost_pid()
+	space := C.cu_active_space()
+	C.cu_activate_pid(C.int32_t(window.pid))
+	time.Sleep(350 * time.Millisecond)
+	value := C.CString(text)
+	defer C.free(unsafe.Pointer(value))
+	err := c.sendFrame(ctx, target, binding, func(w C.cu_window, pinned C.AXUIElementRef, b macFrameBinding, flag *C.cu_cancel_flag) C.int {
+		return C.cu_type_at_frame(w, pinned, C.double(b.X), C.double(b.Y), C.double(b.W), C.double(b.H), C.double(x), C.double(y), value, C.size_t(len(text)), flag, 1)
+	})
+	c.restoreAfterForeground(previous, space)
+	return err
+}
+
+func (c *MacWindowCatalog) restoreAfterForeground(previous C.int32_t, space C.uint64_t) {
+	if previous <= 0 && space == 0 {
+		return
+	}
+	go func() {
+		start := time.Now()
+		stable := 0
+		for time.Now().Before(start.Add(3 * time.Second)) {
+			time.Sleep(150 * time.Millisecond)
+			if previous > 0 && C.cu_frontmost_pid() != previous {
+				C.cu_activate_pid(previous)
+			}
+			if space != 0 && C.cu_active_space() != space {
+				C.cu_restore_space(space)
+			}
+			if (space == 0 || C.cu_active_space() == space) && (previous == 0 || C.cu_frontmost_pid() == previous) {
+				stable++
+				if stable >= 2 {
+					break
+				}
+			} else {
+				stable = 0
+			}
+		}
+	}()
 }
 
 func (c *MacWindowCatalog) OperatorClickFrame(ctx context.Context, target Target, token string, x, y float64) error {
