@@ -1552,7 +1552,12 @@ static int cu_type_unicode_raw(pid_t pid, const char *text, size_t length, cu_ca
 // focused field without requiring an AX text element.
 int cu_type_at_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, double nx, double ny, const char *text, size_t length, cu_cancel_flag *flag, int operator) {
 	if (cu_cancelled(flag)) return 0;
-	if (!cu_click_frame(selected, expected, bx, by, bw, bh, nx, ny, flag, operator)) return 0;
+	// Electron web content may not be visible at dispatch time. Use the
+	// window-local Chromium click path instead of the visible-point check;
+	// the frame lease already bound the target and geometry.
+	CGPoint screen = CGPointMake(bx + nx*bw, by + ny*bh);
+	CGPoint local = CGPointMake(nx*bw, ny*bh);
+	if (!cu_chromium_click(selected, screen, local, flag)) return 0;
 	usleep(60000);
 	return cu_type_unicode_raw(selected.pid, text, length, flag);
 }
