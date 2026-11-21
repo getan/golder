@@ -5,6 +5,8 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <ImageIO/ImageIO.h>
 #import <CoreGraphics/CoreGraphics.h>
+#import <CoreImage/CoreImage.h>
+#import <CoreVideo/CoreVideo.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -78,6 +80,182 @@ int cu_application_metadata(const char *path, char *identity, size_t identityLen
 	CGImageRef image;
 }
 @end
+
+// One long-lived ScreenCaptureKit stream per selected window. A one-shot
+// SCScreenshotManager call returns the last composited image for a window on
+// another desktop; a stream receives the window's surface as the app renders.
+@interface GolderWindowStream : NSObject <SCStreamOutput> {
+@public
+	NSCondition *condition;
+	SCStream *stream;
+	dispatch_queue_t queue;
+	NSData *png;
+	NSTimeInterval capturedAt;
+	int frameStatus;
+	CGRect frame;
+	BOOL started;
+	int32_t pid;
+	uint32_t windowID;
+}
+- (instancetype)initWithPID:(int32_t)pid window:(uint32_t)windowID;
+- (void)start;
+- (void)stop;
+- (BOOL)copyLatest:(void **)out length:(size_t *)length at:(double *)at status:(int *)status frame:(CGRect *)frameOut timeout:(NSTimeInterval)timeout cancelled:(atomic_int *)cancelled;
+@end
+
+static NSMutableDictionary *cu_streams;
+static NSLock *cu_streams_lock;
+
+@implementation GolderWindowStream
+- (instancetype)initWithPID:(int32_t)process window:(uint32_t)window {
+	self = [super init];
+	if (self) {
+		condition = [[NSCondition alloc] init];
+		queue = dispatch_queue_create("dev.golder.capture.stream", DISPATCH_QUEUE_SERIAL);
+		pid = process;
+		windowID = window;
+	}
+	return self;
+}
+- (void)dealloc {
+	[condition release];
+	[png release];
+	if (stream) [stream release];
+	if (queue) dispatch_release(queue);
+	[super dealloc];
+}
+- (void)start {
+	@synchronized(self) {
+		if (started) return;
+		started = YES;
+	}
+	[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content, NSError *error) {
+		if (error || !content) return;
+		SCWindow *selected = nil;
+		for (SCWindow *window in content.windows) {
+			if (window.windowID == self->windowID && window.owningApplication.processID == self->pid) { selected = window; break; }
+		}
+		if (!selected) return;
+		SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:selected];
+		SCStreamConfiguration *configuration = [[SCStreamConfiguration alloc] init];
+		double width = selected.frame.size.width, height = selected.frame.size.height;
+		double scale = fmin(1.0, fmin(1600.0/width, 1200.0/height));
+		configuration.width = (size_t)fmax(1, ceil(width*scale));
+		configuration.height = (size_t)fmax(1, ceil(height*scale));
+		configuration.showsCursor = NO;
+		configuration.capturesAudio = NO;
+		configuration.queueDepth = 3;
+		configuration.minimumFrameInterval = CMTimeMake(1, 15);
+		SCStream *created = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:nil];
+		[created addStreamOutput:self type:SCStreamOutputTypeScreen sampleHandlerQueue:self->queue error:nil];
+		[filter release];
+		[configuration release];
+		@synchronized(self) {
+			self->stream = created;
+			self->frame = selected.frame;
+		}
+		[created startCaptureWithCompletionHandler:^(NSError *startError) {}];
+	}];
+}
+- (void)stop {
+	@synchronized(self) {
+		if (stream) { [stream stopCaptureWithCompletionHandler:nil]; [stream release]; stream = nil; }
+	}
+}
+- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer ofType:(SCStreamOutputType)type {
+	if (type != SCStreamOutputTypeScreen) return;
+	int status = 0;
+	CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, false);
+	if (attachments && CFArrayGetCount(attachments) > 0) {
+		NSDictionary *dict = (__bridge NSDictionary *)CFArrayGetValueAtIndex(attachments, 0);
+		NSNumber *value = dict[(id)SCStreamFrameInfoStatus];
+		if (value) status = value.intValue;
+	}
+	CVPixelBufferRef buffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+	if (!buffer) return;
+	CIImage *image = [CIImage imageWithCVPixelBuffer:buffer];
+	static CIContext *context;
+	if (!context) context = [[CIContext alloc] init];
+	CGImageRef cg = [context createCGImage:image fromRect:image.extent];
+	if (!cg) return;
+	NSMutableData *data = [NSMutableData data];
+	CGImageDestinationRef destination = CGImageDestinationCreateWithData((CFMutableDataRef)data, CFSTR("public.png"), 1, NULL);
+	if (destination) {
+		CGImageDestinationAddImage(destination, cg, NULL);
+		CGImageDestinationFinalize(destination);
+		CFRelease(destination);
+	}
+	CGImageRelease(cg);
+	if (data.length == 0 || data.length > 8*1024*1024) return;
+	[condition lock];
+	[png release];
+	png = [data copy];
+	capturedAt = [NSDate timeIntervalSinceReferenceDate];
+	frameStatus = status;
+	[condition broadcast];
+	[condition unlock];
+}
+- (BOOL)copyLatest:(void **)out length:(size_t *)length at:(double *)at status:(int *)statusOut frame:(CGRect *)frameOut timeout:(NSTimeInterval)timeout cancelled:(atomic_int *)cancelled {
+	NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
+	[condition lock];
+	while (!png && !atomic_load(cancelled) && deadline.timeIntervalSinceNow > 0) {
+		[condition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:fmin(0.05, deadline.timeIntervalSinceNow)]];
+	}
+	BOOL ok = png != nil && !atomic_load(cancelled);
+	if (ok) {
+		*out = malloc(png.length);
+		if (*out) {
+			memcpy(*out, png.bytes, png.length);
+			*length = png.length;
+			*at = capturedAt;
+			*statusOut = frameStatus;
+			*frameOut = self->frame;
+		} else {
+			ok = NO;
+		}
+	}
+	[condition unlock];
+	return ok;
+}
+@end
+
+static GolderWindowStream *cu_stream_for(int32_t pid, uint32_t windowID) {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		cu_streams = [[NSMutableDictionary alloc] init];
+		cu_streams_lock = [[NSLock alloc] init];
+	});
+	NSString *key = [NSString stringWithFormat:@"%d:%u", pid, windowID];
+	[cu_streams_lock lock];
+	GolderWindowStream *stream = [cu_streams objectForKey:key];
+	if (!stream) {
+		stream = [[[GolderWindowStream alloc] initWithPID:pid window:windowID] autorelease];
+		[cu_streams setObject:stream forKey:key];
+	}
+	[cu_streams_lock unlock];
+	[stream start];
+	return stream;
+}
+
+int cu_stream_latest(int32_t pid, uint32_t windowID, double timeout, void **out, size_t *length, double *at, int *status, double *x, double *y, double *w, double *h, void *cancel) {
+	GolderWindowStream *stream = cu_stream_for(pid, windowID);
+	CGRect frame = CGRectZero;
+	if (![stream copyLatest:out length:length at:at status:status frame:&frame timeout:timeout cancelled:(atomic_int *)cancel]) return 0;
+	*x = frame.origin.x;
+	*y = frame.origin.y;
+	*w = frame.size.width;
+	*h = frame.size.height;
+	return 1;
+}
+
+void cu_stream_stop_all(void) {
+	if (!cu_streams) return;
+	[cu_streams_lock lock];
+	NSArray *all = [cu_streams allValues];
+	[cu_streams removeAllObjects];
+	[cu_streams_lock unlock];
+	for (GolderWindowStream *stream in all) [stream stop];
+}
 
 @implementation GolderCaptureResult
 - (instancetype)init {
