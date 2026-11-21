@@ -19,6 +19,8 @@ package computeruse
 #include <unistd.h>
 #include <math.h>
 #include <stdatomic.h>
+#include <objc/runtime.h>
+#include <objc/message.h>
 
 int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h, void *cancel);
 int cu_window_is_on_screen(uint32_t windowID, int32_t pid);
@@ -279,10 +281,60 @@ static cu_set_int_field_fn cu_set_int_field(void) {
 	if (!fn && h) fn = (cu_set_int_field_fn)dlsym(h, "SLEventSetIntegerValueField");
 	return fn;
 }
-static void cu_post_key(pid_t pid, CGEventRef event) {
+typedef void (*cu_set_auth_fn)(CGEventRef, id);
+static cu_set_auth_fn cu_set_auth(void) {
+	static cu_set_auth_fn fn;
+	void *h = cu_skylight();
+	if (!fn && h) fn = (cu_set_auth_fn)dlsym(h, "SLEventSetAuthenticationMessage");
+	return fn;
+}
+
+// The SLSEventRecord pointer is embedded in the CGEvent at a version-dependent
+// offset; probe the same slots as Cua's Swift/Rust bridge.
+static void *cu_event_record(CGEventRef event) {
+	unsigned char *base = (unsigned char *)event;
+	size_t offsets[] = {24, 32, 16};
+	for (size_t i = 0; i < sizeof(offsets)/sizeof(offsets[0]); i++) {
+		void *record = NULL;
+		memcpy(&record, base + offsets[i], sizeof(record));
+		if (record) return record;
+	}
+	return NULL;
+}
+
+// Chromium and Electron on macOS 14+ drop synthetic keyboard events that do
+// not carry SLSEventAuthenticationMessage. Build it with the private factory
+// and attach it before the post; older systems without the selector fall back
+// to a plain SkyLight post.
+static void cu_attach_auth(CGEventRef event, pid_t pid) {
+	static Class cls;
+	static SEL sel;
+	static int tried;
+	if (!tried) {
+		tried = 1;
+		cls = objc_getClass("SLSEventAuthenticationMessage");
+		sel = sel_registerName("messageWithEventRecord:pid:version:");
+	}
+	if (!cls || !class_respondsToSelector(cls, sel)) return;
+	void *record = cu_event_record(event);
+	if (!record) return;
+	id message = ((id (*)(id, SEL, void *, int32_t, uint32_t))objc_msgSend)((id)cls, sel, record, (int32_t)pid, 0);
+	if (!message) return;
+	cu_set_auth_fn set = cu_set_auth();
+	if (set) set(event, message);
+}
+
+static void cu_post_event(pid_t pid, CGEventRef event) {
 	cu_sl_post_fn fn = cu_sl_post();
 	if (fn) fn(pid, event);
 	else CGEventPostToPid(pid, event);
+}
+static void cu_post_key(pid_t pid, CGEventRef event) {
+	cu_attach_auth(event, pid);
+	cu_post_event(pid, event);
+}
+static void cu_post_mouse(pid_t pid, CGEventRef event) {
+	cu_post_event(pid, event);
 }
 
 static int cu_ax_list_result(AXError error, int has_value, int is_array) {
@@ -1156,6 +1208,22 @@ static int cu_psn_for_window(uint32_t wid, pid_t pid, unsigned char psn[8]) {
 
 // Private make-key/focus records. Public AXFocusedWindow alone does not make
 // the NSWindow key, so a background click is ignored for focus.
+typedef int (*cu_ax_get_window_fn)(AXUIElementRef, CGWindowID *);
+static CGWindowID cu_focused_window_id(pid_t pid) {
+	cu_ax_get_window_fn get = (cu_ax_get_window_fn)dlsym(RTLD_DEFAULT, "_AXUIElementGetWindow");
+	if (!get) return 0;
+	AXUIElementRef app = AXUIElementCreateApplication(pid);
+	if (!app) return 0;
+	CFTypeRef focused = NULL;
+	CGWindowID wid = 0;
+	if (AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute, &focused) == kAXErrorSuccess && focused) {
+		get((AXUIElementRef)focused, &wid);
+		CFRelease(focused);
+	}
+	CFRelease(app);
+	return wid;
+}
+
 static int cu_make_key_without_raise(cu_window selected, cu_cancel_flag *flag) {
 	void *h = cu_skylight();
 	if (!h) return 0;
@@ -1164,6 +1232,18 @@ static int cu_make_key_without_raise(cu_window selected, cu_cancel_flag *flag) {
 	unsigned char psn[8] = {0};
 	if (!cu_psn_for_window(selected.window_id, selected.pid, psn)) return 0;
 	unsigned char record[0xF8] = {0};
+	// Defocus the app's current key window first; without it a focus record
+	// alone is often dropped while the app is still handling the old key.
+	CGWindowID current = cu_focused_window_id(selected.pid);
+	if (current && current != selected.window_id) {
+		record[0x04] = 0xF8;
+		record[0x08] = 0x0D;
+		cu_put_le32(record + 0x3C, current);
+		record[0x8A] = 0x02;
+		if (post(psn, record) != 0) return 0;
+		usleep(120000);
+		memset(record, 0, sizeof(record));
+	}
 	// Focus the exact window: record kind 0x0d, direction 1 at 0x8a.
 	record[0x04] = 0xF8;
 	record[0x08] = 0x0D;
@@ -1223,7 +1303,7 @@ static int cu_chromium_click(cu_window selected, CGPoint screen, CGPoint window_
 		setint(event, 91, selected.window_id);  // window under pointer
 		setint(event, 92, selected.window_id);  // window that can handle the event
 		setint(event, 58, group);               // one gesture for the whole sequence
-		cu_post_key(selected.pid, event);
+		cu_post_mouse(selected.pid, event);
 		CFRelease(event);
 		if (steps[i].delay) usleep(steps[i].delay);
 	}
