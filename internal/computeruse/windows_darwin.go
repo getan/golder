@@ -15,6 +15,7 @@ package computeruse
 #include <string.h>
 #include <stdlib.h>
 #include <dlfcn.h>
+#include <time.h>
 #include <unistd.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -1079,6 +1080,54 @@ static int cu_key_target_safe(cu_window selected, AXUIElementRef window, cu_canc
 	return ok;
 }
 
+// Cua's Chromium/macOS 27 recipe: move, an off-screen down/up to wake the
+// renderer's input route, then the real down/up at the target. Every event
+// carries the gesture phase, click group and window-routing fields.
+static int cu_chromium_click(cu_window selected, CGPoint screen, CGPoint window_local, cu_cancel_flag *flag) {
+	cu_set_window_location_fn setloc = cu_set_window_location();
+	cu_set_int_field_fn setint = cu_set_int_field();
+	if (!setloc || !setint) { cu_stage(flag, "focus_spi"); return 0; }
+	CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
+	if (!source) { cu_stage(flag, "focus_source"); return 0; }
+	int64_t group = (int64_t)((time(NULL) & 0xffff) << 16) | (selected.pid & 0xffff);
+	CGPoint off = CGPointMake(-1, -1);
+	struct {
+		CGEventType type;
+		CGPoint location;
+		CGPoint window_location;
+		int phase, click_state;
+		useconds_t delay;
+	} steps[] = {
+		{kCGEventMouseMoved, screen, window_local, 2, 0, 15000},
+		{kCGEventLeftMouseDown, off, off, 1, 1, 1000},
+		{kCGEventLeftMouseUp, off, off, 2, 1, 100000},
+		{kCGEventLeftMouseDown, screen, window_local, 3, 1, 1000},
+		{kCGEventLeftMouseUp, screen, window_local, 3, 1, 0},
+	};
+	int posted = 1;
+	for (size_t i = 0; i < sizeof(steps)/sizeof(steps[0]); i++) {
+		if (cu_cancelled(flag)) { posted = 0; break; }
+		CGEventRef event = CGEventCreateMouseEvent(source, steps[i].type, steps[i].location, kCGMouseButtonLeft);
+		if (!event) { cu_stage(flag, "focus_event"); posted = 0; break; }
+		setloc(event, steps[i].window_location.x, steps[i].window_location.y);
+		setint(event, 0, steps[i].phase);       // kCGMouseEventNumber (gesture phase)
+		setint(event, 1, steps[i].click_state); // kCGMouseEventClickState
+		setint(event, 3, 0);                    // left button
+		setint(event, 7, 3);                    // NSEventSubtypeTouch
+		setint(event, 40, selected.pid);        // Chromium synthetic-event filter
+		setint(event, 51, selected.window_id);  // windowNumber
+		setint(event, 91, selected.window_id);  // window under pointer
+		setint(event, 92, selected.window_id);  // window that can handle the event
+		setint(event, 58, group);               // one gesture for the whole sequence
+		cu_post_key(selected.pid, event);
+		CFRelease(event);
+		if (steps[i].delay) usleep(steps[i].delay);
+	}
+	CFRelease(source);
+	if (!posted) return 0;
+	return 1;
+}
+
 // Focus a reviewed field without raising its app: one click is posted to the
 // target pid, then the app's focused element is required to become that exact
 // node. Web inputs often refuse AXFocused writes, so this is the only way to
@@ -1095,40 +1144,7 @@ static int cu_focus_field(cu_window selected, AXUIElementRef expected, AXUIEleme
 	if (!cu_current_bounds(selected, &bounds)) { cu_stage(flag, "focus_bounds"); return 0; }
 	CGPoint center = CGPointMake(frame.origin.x + frame.size.width/2, frame.origin.y + frame.size.height/2);
 	CGPoint local = CGPointMake(center.x - bounds.origin.x, center.y - bounds.origin.y);
-	cu_set_window_location_fn setloc = cu_set_window_location();
-	cu_set_int_field_fn setint = cu_set_int_field();
-	if (!setloc || !setint) { cu_stage(flag, "focus_spi"); return 0; }
-	// A background AppKit/Chromium window needs a move at the target before
-	// the click so its cursor tracking is not stale.
-	CGEventRef move = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, center, 0);
-	if (move) {
-		setloc(move, local.x, local.y);
-		setint(move, 40, selected.pid);
-		setint(move, 51, selected.window_id);
-		setint(move, 91, selected.window_id);
-		setint(move, 92, selected.window_id);
-		cu_post_key(selected.pid, move);
-		CFRelease(move);
-		usleep(15000);
-	}
-	CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, center, kCGMouseButtonLeft);
-	CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, center, kCGMouseButtonLeft);
-	if (!down || !up || cu_cancelled(flag)) { if (down) CFRelease(down); if (up) CFRelease(up); cu_stage(flag, "focus_event"); return 0; }
-	for (int i = 0; i < 2; i++) {
-		CGEventRef event = i == 0 ? down : up;
-		setloc(event, local.x, local.y);
-		setint(event, 1, 1); // kCGMouseEventClickState
-		setint(event, 3, 0); // kCGMouseEventButtonNumber (left)
-		setint(event, 7, 0); // kCGMouseEventSubtype
-		setint(event, 40, selected.pid);
-		setint(event, 51, selected.window_id);
-		setint(event, 91, selected.window_id);
-		setint(event, 92, selected.window_id);
-	}
-	cu_post_key(selected.pid, down);
-	cu_post_key(selected.pid, up);
-	CFRelease(down);
-	CFRelease(up);
+	if (!cu_chromium_click(selected, center, local, flag)) return 0;
 	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
 	int focused = 0;
 	if (app) AXUIElementSetMessagingTimeout(app, 0.5);
