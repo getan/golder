@@ -1103,6 +1103,64 @@ static int cu_focused_text_at(AXUIElementRef app, CGRect want, cu_cancel_flag *f
 	return ok;
 }
 
+typedef int (*cu_post_record_fn)(const void *, const unsigned char *);
+typedef int (*cu_get_owner_fn)(uint32_t, uint32_t, uint32_t *);
+typedef int (*cu_conn_psn_fn)(uint32_t, void *);
+typedef uint32_t (*cu_conn_id_fn)(void);
+typedef int (*cu_get_pid_psn_fn)(pid_t, void *);
+
+static void cu_put_le32(unsigned char *p, uint32_t v) {
+	p[0] = (unsigned char)(v & 0xff);
+	p[1] = (unsigned char)((v >> 8) & 0xff);
+	p[2] = (unsigned char)((v >> 16) & 0xff);
+	p[3] = (unsigned char)((v >> 24) & 0xff);
+}
+
+static int cu_psn_for_window(uint32_t wid, pid_t pid, unsigned char psn[8]) {
+	void *h = cu_skylight();
+	if (h) {
+		cu_conn_id_fn conn = (cu_conn_id_fn)dlsym(h, "CGSMainConnectionID");
+		cu_get_owner_fn owner = (cu_get_owner_fn)dlsym(h, "SLSGetWindowOwner");
+		cu_conn_psn_fn psnfn = (cu_conn_psn_fn)dlsym(h, "SLSGetConnectionPSN");
+		if (conn && owner && psnfn) {
+			uint32_t cid = conn(), owner_cid = 0;
+			if (owner(cid, wid, &owner_cid) == 0 && owner_cid != 0 && psnfn(owner_cid, psn) == 0) return 1;
+		}
+	}
+	cu_get_pid_psn_fn fallback = (cu_get_pid_psn_fn)dlsym(RTLD_DEFAULT, "GetProcessForPID");
+	return fallback && fallback(pid, psn) == 0;
+}
+
+// Private make-key/focus records. Public AXFocusedWindow alone does not make
+// the NSWindow key, so a background click is ignored for focus.
+static int cu_make_key_without_raise(cu_window selected, cu_cancel_flag *flag) {
+	void *h = cu_skylight();
+	if (!h) return 0;
+	cu_post_record_fn post = (cu_post_record_fn)dlsym(h, "SLPSPostEventRecordTo");
+	if (!post) return 0;
+	unsigned char psn[8] = {0};
+	if (!cu_psn_for_window(selected.window_id, selected.pid, psn)) return 0;
+	unsigned char record[0xF8] = {0};
+	// Focus the exact window: record kind 0x0d, direction 1 at 0x8a.
+	record[0x04] = 0xF8;
+	record[0x08] = 0x0D;
+	cu_put_le32(record + 0x3C, selected.window_id);
+	record[0x8A] = 0x01;
+	if (post(psn, record) != 0) return 0;
+	usleep(120000);
+	for (int i = 0; i < 2; i++) {
+		memset(record, 0, sizeof(record));
+		record[0x04] = 0xF8;
+		record[0x08] = i == 0 ? 0x01 : 0x02; // make-key press/release
+		record[0x3A] = 0x10;
+		cu_put_le32(record + 0x3C, selected.window_id);
+		memset(record + 0x20, 0xFF, 0x10);
+		if (cu_cancelled(flag) || post(psn, record) != 0) return 0;
+	}
+	usleep(120000);
+	return 1;
+}
+
 // Cua's Chromium/macOS 27 recipe: move, an off-screen down/up to wake the
 // renderer's input route, then the real down/up at the target. Every event
 // carries the gesture phase, click group and window-routing fields.
@@ -1173,6 +1231,7 @@ static int cu_focus_field(cu_window selected, AXUIElementRef expected, AXUIEleme
 	}
 	if (window) CFRelease(window);
 	if (!member || cu_cancelled(flag)) { cu_stage(flag, "focus_member"); return 0; }
+	cu_make_key_without_raise(selected, flag); // best effort; focus is rechecked below
 	usleep(50000);
 	CGRect bounds;
 	if (!cu_current_bounds(selected, &bounds)) { cu_stage(flag, "focus_bounds"); return 0; }
