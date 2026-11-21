@@ -961,8 +961,10 @@ static int cu_click_frame(cu_window selected, AXUIElementRef expected, double bx
 	CGEventSetIntegerValueField(up, kCGMouseEventClickState, 1);
 	CGEventSetFlags(down, 0);
 	CGEventSetFlags(up, 0);
-	CGEventPostToPid(selected.pid, down);
-	CGEventPostToPid(selected.pid, up);
+	// cu_focused_control_safe proved the target window is frontmost and the
+	// exact reviewed control has keyboard focus, so HID delivery is addressed.
+	CGEventPost(kCGHIDEventTap, down);
+	CGEventPost(kCGHIDEventTap, up);
 	CFRelease(down);
 	CFRelease(up);
 	return 1; // dispatched, not proof that the app acted on the event
@@ -1174,6 +1176,17 @@ static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElement
 	if (!field) return 0;
 	int rc = cu_ax_invoke(selected, expected, element, kAXConfirmAction, flag);
 	if (rc != -2) return rc; // never try Return after any attempted AXConfirm
+	// No AXConfirm: focus this exact field, then let cu_press_frame verify the
+	// focused control and window before sending one HID Return.
+	AXUIElementRef window = cu_ax_window(selected, 0, flag);
+	Boolean settable = false;
+	int focused = window && expected && CFEqual(window, expected) && !cu_cancelled(flag) &&
+		AXUIElementIsAttributeSettable(element, kAXFocusedAttribute, &settable) == kAXErrorSuccess && settable &&
+		AXUIElementSetAttributeValue(element, kAXFocusedAttribute, kCFBooleanTrue) == kAXErrorSuccess;
+	int budget = 128;
+	if (focused) focused = cu_ax_contains(window, element, 0, &budget, flag);
+	if (window) CFRelease(window);
+	if (!focused || cu_cancelled(flag)) return 0;
 	CGRect b;
 	if (cu_cancelled(flag) || !cu_current_bounds(selected, &b)) return 0;
 	flag->reviewed = element; // cu_press_frame requires this exact focused control twice
@@ -1637,6 +1650,13 @@ func (*MacWindowCatalog) SupportsAction(action string) bool {
 func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, ref, action, text string) error {
 	if !c.SupportsAction(action) || (action != "fill" && text != "") || len(text) > 4096 || !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') {
 		return ErrNotAllowed
+	}
+	if action == "submit" {
+		// Keyboard submission requires this exact window frontmost. Restore it
+		// before taking c.mu; identity and geometry are rechecked afterwards.
+		if _, err := c.PrepareForeground(ctx, target); err != nil {
+			return noInputError(err)
+		}
 	}
 	if err := c.Validate(ctx, target, true); err != nil {
 		return noInputValidationError(err)
