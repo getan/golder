@@ -14,6 +14,7 @@ package computeruse
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <dlfcn.h>
 #include <unistd.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -220,6 +221,25 @@ static int cu_cancelled(cu_cancel_flag *flag) { return flag && atomic_load(&flag
 // First failed native check wins; it never contains window or user content.
 static void cu_stage(cu_cancel_flag *flag, const char *stage) {
 	if (flag && stage && !flag->stage[0]) snprintf(flag->stage, sizeof(flag->stage), "%s", stage);
+}
+
+// SkyLight's per-pid post takes the IOHID path that Chromium accepts; the
+// public CGEventPostToPid is ignored as dead input by Chromium/Electron.
+typedef void (*cu_sl_post_fn)(pid_t, CGEventRef);
+static cu_sl_post_fn cu_sl_post(void) {
+	static cu_sl_post_fn fn;
+	static int tried;
+	if (!tried) {
+		tried = 1;
+		void *h = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
+		if (h) fn = (cu_sl_post_fn)dlsym(h, "SLEventPostToPid");
+	}
+	return fn;
+}
+static void cu_post_key(pid_t pid, CGEventRef event) {
+	cu_sl_post_fn fn = cu_sl_post();
+	if (fn) fn(pid, event);
+	else CGEventPostToPid(pid, event);
 }
 
 static int cu_ax_list_result(AXError error, int has_value, int is_array) {
@@ -1024,19 +1044,34 @@ static int cu_focused_control_safe(cu_window selected, AXUIElementRef window, cu
 	return ok;
 }
 
+// Keyboard delivery is addressed to the application's focused control. It does
+// not require the app to be frontmost or the point unobscured; the key is
+// posted to the target pid, never to whatever window happens to be in front.
+static int cu_key_target_safe(cu_window selected, AXUIElementRef window, cu_cancel_flag *flag) {
+	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
+	CFTypeRef focused = NULL;
+	int ok = app && AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &focused) == kAXErrorSuccess && focused &&
+		CFGetTypeID(focused) == AXUIElementGetTypeID() && !CFEqual(window, focused) && cu_direct_control((AXUIElementRef)focused);
+	if (ok && flag->reviewed) ok = CFEqual(focused, flag->reviewed);
+	int budget = 128;
+	if (ok) ok = cu_ax_contains(window, (AXUIElementRef)focused, 0, &budget, flag);
+	if (focused) CFRelease(focused);
+	if (app) CFRelease(app);
+	return ok;
+}
+
 static int cu_press_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, uint16_t code, cu_cancel_flag *flag) {
 	if (!expected || cu_cancelled(flag) || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || bw <= 0 || bh <= 0) { cu_stage(flag, "press_args"); return 0; }
 	CGRect bounds;
 	if (!cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) { cu_stage(flag, "press_bounds"); return 0; }
-	AXUIElementRef window = cu_ax_window(selected, 1, flag);
+	AXUIElementRef window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { cu_stage(flag, "press_window"); if (window) CFRelease(window); return 0; }
-	CGPoint reviewedPoint = CGPointMake(bx + flag->px*bw, by + flag->py*bh);
-	int ok = (!flag->coordinate || cu_point_unobscured(selected, expected, reviewedPoint, flag)) && cu_focused_control_safe(selected, window, flag);
+	int ok = cu_key_target_safe(selected, window, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag)) { cu_stage(flag, "press_focus"); return 0; }
-	window = cu_ax_window(selected, 1, flag);
+	window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { cu_stage(flag, "press_window2"); if (window) CFRelease(window); return 0; }
-	ok = (!flag->coordinate || cu_point_unobscured(selected, expected, reviewedPoint, flag)) && cu_focused_control_safe(selected, window, flag);
+	ok = cu_key_target_safe(selected, window, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) { cu_stage(flag, "press_focus2"); return 0; }
 	CGEventRef down = CGEventCreateKeyboardEvent(NULL, code, true);
@@ -1044,8 +1079,8 @@ static int cu_press_frame(cu_window selected, AXUIElementRef expected, double bx
 	if (!down || !up || cu_cancelled(flag)) { cu_stage(flag, "press_event"); if (down) CFRelease(down); if (up) CFRelease(up); return 0; }
 	CGEventSetFlags(down, 0);
 	CGEventSetFlags(up, 0);
-	CGEventPostToPid(selected.pid, down);
-	CGEventPostToPid(selected.pid, up);
+	cu_post_key(selected.pid, down);
+	cu_post_key(selected.pid, up);
 	CFRelease(down);
 	CFRelease(up);
 	return 1;
@@ -1218,7 +1253,8 @@ static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElement
 		result = cu_ax_invoke(selected, expected, target, kAXConfirmAction, flag);
 		if (result == 0) cu_stage(flag, "submit_confirm");
 	} else {
-		AXUIElementRef window = cu_ax_window(selected, 1, flag);
+		// Key delivery is addressed to the target pid; frontmost is not required.
+		AXUIElementRef window = cu_ax_window(selected, 0, flag);
 		int member = 0, budget = 128;
 		if (!window || !expected || !CFEqual(window, expected)) {
 			cu_stage(flag, "submit_window");
@@ -1270,6 +1306,79 @@ static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElement
 	}
 	if (resolved) CFRelease(resolved);
 	return result;
+}
+
+// Replaces a web text field through real key events: select all, then type.
+// Chromium ignores AXValue writes, but accepts per-pid key delivery.
+static int cu_ax_replace(cu_window selected, AXUIElementRef expected, AXUIElementRef element, const char *text, size_t length, cu_cancel_flag *flag) {
+	if (!element || !text || length > 4096 || cu_cancelled(flag)) return 0;
+	CFTypeRef role = NULL;
+	int field = AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role) == kAXErrorSuccess && cu_ax_text_role(role);
+	if (role) CFRelease(role);
+	if (!field) { cu_stage(flag, "replace_role"); return 0; }
+	AXUIElementRef window = cu_ax_window(selected, 0, flag);
+	int budget = 128;
+	int member = window && expected && CFEqual(window, expected) && cu_ax_contains(window, element, 0, &budget, flag);
+	if (window) CFRelease(window);
+	if (!member || cu_cancelled(flag)) { cu_stage(flag, "replace_member"); return 0; }
+	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
+	int focused = 0;
+	if (app) AXUIElementSetMessagingTimeout(app, 0.5);
+	for (int i = 0; app && i < 12 && !focused && !cu_cancelled(flag); i++) {
+		CFTypeRef current = NULL;
+		focused = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &current) == kAXErrorSuccess &&
+			current && CFEqual(current, element);
+		if (current) CFRelease(current);
+		if (!focused && i == 0) {
+			Boolean settable = false;
+			if (cu_cancelled(flag) || AXUIElementIsAttributeSettable(element, kAXFocusedAttribute, &settable) != kAXErrorSuccess || !settable ||
+				AXUIElementSetAttributeValue(element, kAXFocusedAttribute, kCFBooleanTrue) != kAXErrorSuccess) break;
+		}
+		if (!focused) usleep(25000);
+	}
+	if (app) CFRelease(app);
+	if (!focused || cu_cancelled(flag)) { cu_stage(flag, "replace_focus"); return -3; }
+	CGEventRef selectDown = CGEventCreateKeyboardEvent(NULL, 0, true);
+	CGEventRef selectUp = CGEventCreateKeyboardEvent(NULL, 0, false);
+	if (!selectDown || !selectUp || cu_cancelled(flag)) {
+		if (selectDown) CFRelease(selectDown);
+		if (selectUp) CFRelease(selectUp);
+		cu_stage(flag, "replace_select");
+		return 0;
+	}
+	CGEventSetFlags(selectDown, kCGEventFlagMaskCommand);
+	CGEventSetFlags(selectUp, kCGEventFlagMaskCommand);
+	cu_post_key(selected.pid, selectDown);
+	cu_post_key(selected.pid, selectUp);
+	CFRelease(selectDown);
+	CFRelease(selectUp);
+	CFStringRef value = CFStringCreateWithBytes(NULL, (const UInt8 *)text, (CFIndex)length, kCFStringEncodingUTF8, false);
+	if (!value) return -1; // select-all was already sent
+	UniChar buffer[4096];
+	CFIndex total = CFStringGetLength(value);
+	if (total > 4096) { CFRelease(value); return -1; }
+	CFStringGetCharacters(value, CFRangeMake(0, total), buffer);
+	CFRelease(value);
+	int sent = 0;
+	for (CFIndex offset = 0; offset < total;) {
+		if (cu_cancelled(flag)) return -1;
+		CFIndex count = total-offset < 20 ? total-offset : 20;
+		if (offset+count < total && CFStringIsSurrogateHighCharacter(buffer[offset+count-1])) count--;
+		CGEventRef down = CGEventCreateKeyboardEvent(NULL, 0, true);
+		CGEventRef up = CGEventCreateKeyboardEvent(NULL, 0, false);
+		if (!down || !up || cu_cancelled(flag)) { if (down) CFRelease(down); if (up) CFRelease(up); return -1; }
+		CGEventSetFlags(down, 0);
+		CGEventSetFlags(up, 0);
+		CGEventKeyboardSetUnicodeString(down, count, buffer+offset);
+		CGEventKeyboardSetUnicodeString(up, count, buffer+offset);
+		cu_post_key(selected.pid, down);
+		cu_post_key(selected.pid, up);
+		CFRelease(down);
+		CFRelease(up);
+		sent = 1;
+		offset += count;
+	}
+	return sent;
 }
 
 static int cu_ax_close_window(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag) {
@@ -1720,21 +1829,23 @@ func (c *MacWindowCatalog) snapshotAXStatus(id string) AXTreeStatus {
 }
 
 func (*MacWindowCatalog) SupportsAction(action string) bool {
-	return action == "click" || action == "fill" || action == "submit"
+	return action == "click" || action == "fill" || action == "replace" || action == "submit"
 }
 
 // Act executes a targeted AXPress or non-secure AXValue replacement on a node
 // from the bound backend snapshot. Target and membership are rechecked before
 // the OS request; cancellation cannot undo an already-sent action.
 func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, ref, action, text string) error {
-	if !c.SupportsAction(action) || (action != "fill" && text != "") || len(text) > 4096 || !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') {
+	if !c.SupportsAction(action) || (action != "fill" && action != "replace" && text != "") || len(text) > 4096 || !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') {
 		return ErrNotAllowed
 	}
 	if action == "submit" {
 		return routeFieldSubmit(func() error { return c.actNative(ctx, target, snapshotID, ref, action, text, false) }, func() error {
+			return c.actNative(ctx, target, snapshotID, ref, action, text, true)
+		}, func() error {
 			_, err := c.PrepareForeground(ctx, target)
 			return err
-		}, func() error { return c.actNative(ctx, target, snapshotID, ref, action, text, true) })
+		})
 	}
 	return c.actNative(ctx, target, snapshotID, ref, action, text, false)
 }
@@ -1770,6 +1881,10 @@ func (c *MacWindowCatalog) actNative(ctx context.Context, target Target, snapsho
 			mode = 1
 		}
 		performed = C.cu_ax_submit(window, c.pinned[target.ID], element, flag, mode)
+	} else if action == "replace" {
+		value := C.CString(text)
+		performed = C.cu_ax_replace(window, c.pinned[target.ID], element, value, C.size_t(len(text)), flag)
+		C.free(unsafe.Pointer(value))
 	} else {
 		value := C.CString(text)
 		performed = C.cu_ax_fill(window, c.pinned[target.ID], element, value, C.size_t(len(text)), flag)
@@ -1780,7 +1895,7 @@ func (c *MacWindowCatalog) actNative(ctx context.Context, target Target, snapsho
 	}
 	stage := C.GoString(&flag.stage[0])
 	C.free(unsafe.Pointer(flag))
-	if performed != -2 {
+	if performed != -2 && performed != -4 && performed != -3 {
 		c.clearSnapshotLocked()
 	}
 	c.mu.Unlock()

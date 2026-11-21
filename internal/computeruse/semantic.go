@@ -95,10 +95,10 @@ func (s *Session) Observe(ctx context.Context) (Snapshot, error) {
 // Act executes a supported semantic action only against a current observed
 // ref. The lease is consumed even on failure so callers must observe again.
 func (s *Session) Act(ctx context.Context, snapshotID, ref, action, text string) error {
-	if action != "click" && action != "fill" && action != "submit" {
+	if action != "click" && action != "fill" && action != "replace" && action != "submit" {
 		return ErrNotAllowed
 	}
-	if action != "fill" && text != "" {
+	if action != "fill" && action != "replace" && text != "" {
 		return ErrNotAllowed
 	}
 	if len(text) > 4096 {
@@ -131,7 +131,10 @@ func (s *Session) Act(ctx context.Context, snapshotID, ref, action, text string)
 		if element.Secure && element.Enabled && element.ControlBlock == "control_secure_field" && !isOperatorContext(ctx) {
 			return s.pauseForPassword()
 		}
-		if element.Secure || !element.Enabled || (action == "fill" && !element.Editable) {
+		if element.Secure || !element.Enabled || ((action == "fill" || action == "replace") && !element.Editable) {
+			return noInputError(ErrNotAllowed)
+		}
+		if action == "replace" && element.Role != "AXTextField" && element.Role != "AXTextArea" {
 			return noInputError(ErrNotAllowed)
 		}
 		if action == "submit" && (element.Role != "AXTextField" || !element.Editable) {
