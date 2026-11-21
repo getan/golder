@@ -1156,7 +1156,8 @@ static int cu_ax_invoke(cu_window selected, AXUIElementRef expected, AXUIElement
 	allowed = listed && CFArrayContainsValue(actions, CFRangeMake(0, CFArrayGetCount(actions)), action);
 	if (actions) CFRelease(actions);
 	if (cu_cancelled(flag)) return 0;
-	if (!allowed) return listed ? -2 : 0; // proven absent vs. cannot inspect
+	if (!listed) return -4; // no AX action sent; callers may choose the keyboard path
+	if (!allowed) return -2;
 	window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	budget = 128;
@@ -1170,7 +1171,7 @@ static int cu_ax_invoke(cu_window selected, AXUIElementRef expected, AXUIElement
 
 static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementRef element, cu_cancel_flag *flag) {
 	int rc = cu_ax_invoke(selected, expected, element, kAXPressAction, flag);
-	return rc == -2 ? 0 : rc;
+	return (rc == -2 || rc == -4) ? 0 : rc;
 }
 
 static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElementRef element, cu_cancel_flag *flag, int keyboard) {
@@ -1722,6 +1723,9 @@ func (c *MacWindowCatalog) actNative(ctx context.Context, target Target, snapsho
 		return err
 	}
 	if performed == -2 {
+		return errNoConfirmAction
+	}
+	if performed == -4 {
 		return errNoConfirmAction
 	}
 	if performed == -3 {
