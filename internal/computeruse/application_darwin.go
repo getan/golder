@@ -5,6 +5,10 @@ package computeruse
 /*
 #include <stdlib.h>
 int cu_application_metadata(const char *path, char *identity, size_t identityLength, char *display, size_t displayLength, char *name, size_t nameLength);
+int cu_launch_background(const char *path, const char *const *args, int count);
+int cu_frontmost_pid(void);
+int cu_activate_pid(int32_t pid);
+int cu_frontmost_bundle_is(const char *bundleID);
 */
 import "C"
 
@@ -19,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 )
 
@@ -156,17 +161,24 @@ func (c *MacWindowCatalog) applicationsIn(ctx context.Context, requested string,
 // the Golder GUI or terminal as the foreground application.
 func macApplicationLaunchArgs(path string) []string {
 	args := []string{"-g", "-a", path}
-	if macApplicationIsChromium(path) {
-		// Without these, Chromium stops painting when its window is occluded or
-		// on another Space, so a background preview stays on the last frame.
-		args = append(args,
-			"--args",
-			"--disable-backgrounding-occluded-windows",
-			"--disable-renderer-backgrounding",
-			"--disable-background-timer-throttling",
-		)
+	if flags := macApplicationBackgroundArguments(path); len(flags) > 0 {
+		args = append(args, "--args")
+		args = append(args, flags...)
 	}
 	return args
+}
+
+func macApplicationBackgroundArguments(path string) []string {
+	if !macApplicationIsChromium(path) {
+		return nil
+	}
+	// Without these, Chromium stops painting when its window is occluded or
+	// on another Space, so a background preview stays on the last frame.
+	return []string{
+		"--disable-backgrounding-occluded-windows",
+		"--disable-renderer-backgrounding",
+		"--disable-background-timer-throttling",
+	}
 }
 
 func macApplicationIsChromium(path string) bool {
@@ -213,12 +225,40 @@ func (c *MacWindowCatalog) openApplication(ctx context.Context, app Application,
 	if !ok || bundleID != candidate.bundleID {
 		return errors.New("application bundle identity changed before launch")
 	}
-	args := macApplicationLaunchArgs(candidate.path)
 	if reveal {
-		args = macApplicationRevealArgs(candidate.path)
+		if err := exec.CommandContext(ctx, "open", macApplicationRevealArgs(candidate.path)...).Run(); err != nil {
+			return fmt.Errorf("launch %s: %w", app.Name, err)
+		}
+		return nil
 	}
-	if err := exec.CommandContext(ctx, "open", args...).Run(); err != nil {
-		return fmt.Errorf("launch %s: %w", app.Name, err)
+	previous := C.cu_frontmost_pid()
+	application := C.CString(candidate.path)
+	defer C.free(unsafe.Pointer(application))
+	flags := macApplicationBackgroundArguments(candidate.path)
+	cargs := make([]*C.char, len(flags))
+	for i, flag := range flags {
+		cargs[i] = C.CString(flag)
+		defer C.free(unsafe.Pointer(cargs[i]))
+	}
+	var argv **C.char
+	if len(cargs) > 0 {
+		argv = (**C.char)(unsafe.Pointer(&cargs[0]))
+	}
+	if C.cu_launch_background(application, argv, C.int(len(cargs))) == 0 {
+		if err := exec.CommandContext(ctx, "open", macApplicationLaunchArgs(candidate.path)...).Run(); err != nil {
+			return fmt.Errorf("launch %s: %w", app.Name, err)
+		}
+		return nil
+	}
+	// Some Electron apps activate themselves during startup. Restore the app
+	// that was frontmost before the launch, as Cua's focus guard does.
+	if previous > 0 {
+		time.Sleep(250 * time.Millisecond)
+		bundle := C.CString(candidate.bundleID)
+		defer C.free(unsafe.Pointer(bundle))
+		if C.cu_frontmost_bundle_is(bundle) != 0 {
+			C.cu_activate_pid(previous)
+		}
 	}
 	return nil
 }

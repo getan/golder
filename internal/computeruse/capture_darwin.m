@@ -312,6 +312,59 @@ int cu_capture_window_skylight(uint32_t windowID, void **out, size_t *length, do
 	return 1;
 }
 
+// Launch through LaunchServices without activation. `open -g` is not enough:
+// Electron apps can activate themselves during startup and switch the user's
+// Space. NSWorkspaceOpenConfiguration.activates = false is the background
+// contract Cua uses; the caller restores the previous frontmost app if the
+// target still steals focus.
+int cu_launch_background(const char *path, const char *const *args, int count) {
+	@autoreleasepool {
+		NSString *application = [NSString stringWithUTF8String:path];
+		if (application.length == 0) return 0;
+		NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+		configuration.activates = NO;
+		configuration.addsToRecentItems = NO;
+		if (count > 0) {
+			NSMutableArray *arguments = [NSMutableArray arrayWithCapacity:(NSUInteger)count];
+			for (int i = 0; i < count; i++) {
+				if (args[i]) [arguments addObject:[NSString stringWithUTF8String:args[i]]];
+			}
+			configuration.arguments = arguments;
+		}
+		dispatch_semaphore_t done = dispatch_semaphore_create(0);
+		__block int ok = 0;
+		[[NSWorkspace sharedWorkspace] openApplicationAtURL:[NSURL fileURLWithPath:application] configuration:configuration completionHandler:^(NSRunningApplication *app, NSError *error) {
+			ok = (error == nil && app != nil) ? 1 : 0;
+			dispatch_semaphore_signal(done);
+		}];
+		dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+		return ok;
+	}
+}
+
+int cu_frontmost_pid(void) {
+	@autoreleasepool {
+		NSRunningApplication *app = [[NSWorkspace sharedWorkspace] frontmostApplication];
+		return app ? app.processIdentifier : 0;
+	}
+}
+
+int cu_activate_pid(int32_t pid) {
+	@autoreleasepool {
+		NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:(pid_t)pid];
+		if (!app || app.terminated) return 0;
+		return [app activateWithOptions:0] ? 1 : 0;
+	}
+}
+
+int cu_frontmost_bundle_is(const char *bundleID) {
+	@autoreleasepool {
+		NSString *expected = bundleID ? [NSString stringWithUTF8String:bundleID] : nil;
+		NSRunningApplication *app = [[NSWorkspace sharedWorkspace] frontmostApplication];
+		return expected.length > 0 && [app.bundleIdentifier isEqualToString:expected] ? 1 : 0;
+	}
+}
+
 @implementation GolderCaptureResult
 - (instancetype)init {
 	self = [super init];
