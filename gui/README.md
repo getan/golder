@@ -74,6 +74,11 @@ running; use **Pause / take over** or **Stop** to interrupt it. On macOS, frame
 input can restore focus to the same authorized window, then recheck its frame
 before dispatch. Preview captures and semantic actions do not steal focus.
 
+When a task requires a password, the agent pauses for you to enter it in the
+original app. Do not send passwords in chat. Finish the password step, then
+resume locally; the agent must observe a fresh snapshot before continuing.
+Merely seeing a password field elsewhere in a window does not pause a task.
+
 **Pause / take over** now enters exclusive **Human control**. The Agent remains
 paused while you click the displayed window and use the masked text field plus
 **Insert** (or Enter) to insert plain text at the caret. Text is not logged,

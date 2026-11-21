@@ -128,6 +128,9 @@ func (s *Session) Act(ctx context.Context, snapshotID, ref, action, text string)
 		}
 		s.snapshot = nil
 		s.mu.Unlock()
+		if element.Secure && element.Enabled && element.ControlBlock == "control_secure_field" && !isOperatorContext(ctx) {
+			return s.pauseForPassword()
+		}
 		if element.Secure || !element.Enabled || (action == "fill" && !element.Editable) {
 			return noInputError(ErrNotAllowed)
 		}
@@ -136,4 +139,11 @@ func (s *Session) Act(ctx context.Context, snapshotID, ref, action, text string)
 		}
 		return performer.Act(ctx, target, lease.backendID, ref, action, text)
 	})
+}
+
+var ErrPasswordHandoff = errors.New("session paused for password entry in the selected app; only the operator may resume")
+
+func (s *Session) pauseForPassword() error {
+	s.Pause()
+	return noInputError(ErrPasswordHandoff)
 }

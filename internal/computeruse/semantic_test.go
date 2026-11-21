@@ -75,6 +75,29 @@ func (b *guardedSemanticBackend) Act(_ context.Context, _ Target, _, _, _, text 
 	return nil
 }
 
+func TestPasswordHandoffPausesBeforeDispatch(t *testing.T) {
+	ctx := context.Background()
+	b := &guardedSemanticBackend{element: Element{Ref: "@pw", Secure: true, Enabled: true, ControlBlock: "control_secure_field"}}
+	s := New(b)
+	if err := s.Start(ctx, Target{ID: "w"}, Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := s.Observe(ctx)
+	if err != nil || s.Status().Paused {
+		t.Fatalf("observation triggered handoff: %v", err)
+	}
+	err = s.Act(ctx, snap.ID, "@pw", "click", "")
+	if !errors.Is(err, ErrPasswordHandoff) || !errors.Is(err, ErrNoInput) || !s.Status().Paused || b.called != 0 {
+		t.Fatalf("handoff: %v, dispatched=%d", err, b.called)
+	}
+	if err = s.Resume(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Act(ctx, snap.ID, "@pw", "click", ""); !errors.Is(err, ErrStaleObservation) {
+		t.Fatalf("pre-handoff lease reused: %v", err)
+	}
+}
+
 func TestSemanticGuardRejectsSecureDisabledAndNonEditableNodes(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

@@ -454,28 +454,32 @@ static int cu_ax_text_role(CFTypeRef role) {
 		(CFEqual(role, CFSTR("AXTextField")) || CFEqual(role, CFSTR("AXTextArea")));
 }
 
-// A text control without a readable subrole cannot be distinguished from a
-// secure field, and an element without a readable role cannot be classified.
-static const char *cu_ax_block_reason(CFTypeRef role, CFTypeRef subrole) {
-	if (!role || CFGetTypeID(role) != CFStringGetTypeID()) return "role_unreadable";
+// An absent optional subrole is normal on Chromium text fields. An AX
+// transport error is not evidence of absence. Never inspect text values.
+static const char *cu_ax_block_reason(CFTypeRef role, CFTypeRef subrole, AXError rc) {
+	if (!role || CFGetTypeID(role) != CFStringGetTypeID() || !CFStringGetLength(role)) return "role_unreadable";
 	if (CFEqual(role, CFSTR("AXSecureTextField"))) return "secure_field";
-	if (subrole && CFGetTypeID(subrole) == CFStringGetTypeID()) {
-		return CFEqual(subrole, CFSTR("AXSecureTextField")) ? "secure_field" : NULL;
-	}
-	return cu_ax_text_role(role) ? "text_subrole_unreadable" : NULL;
+	if (subrole && CFEqual(subrole, CFSTR("AXSecureTextField"))) return "secure_field";
+	if (!cu_ax_text_role(role)) return NULL;
+	if (!subrole && (rc == kAXErrorNoValue || rc == kAXErrorAttributeUnsupported)) return NULL;
+	if (rc != kAXErrorSuccess || !subrole || CFGetTypeID(subrole) != CFStringGetTypeID() || !CFStringGetLength(subrole)) return "text_subrole_unreadable";
+	return NULL;
 }
 
-static int cu_ax_secure_or_unknown(CFTypeRef role, CFTypeRef subrole) {
-	return cu_ax_block_reason(role, subrole) != NULL;
+static const char *cu_ax_read_block(AXUIElementRef element, CFTypeRef role) {
+	CFTypeRef subrole = NULL;
+	AXError rc = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute, &subrole);
+	const char *block = cu_ax_block_reason(role, subrole, rc);
+	if (subrole) CFRelease(subrole);
+	return block;
 }
 
 static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, int *count, int depth, int ancestor_secure, int *truncated, cu_cancel_flag *flag) {
 	if (!element || *count >= cap || depth > 16 || cu_cancelled(flag)) { *truncated = 1; return; }
 	AXUIElementSetMessagingTimeout(element, 0.3);
-	CFTypeRef role = NULL, subrole = NULL, title = NULL, enabled = NULL, value = NULL;
+	CFTypeRef role = NULL, title = NULL, enabled = NULL, value = NULL;
 	AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role);
-	AXUIElementCopyAttributeValue(element, kAXSubroleAttribute, &subrole);
-	const char *reason = cu_ax_block_reason(role, subrole);
+	const char *reason = cu_ax_read_block(element, role);
 	int secure = ancestor_secure || reason != NULL;
 	cu_ax_node *node = &nodes[(*count)++];
 	node->element = (AXUIElementRef)CFRetain(element);
@@ -503,7 +507,6 @@ static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, in
 		node->enabled = CFBooleanGetValue((CFBooleanRef)enabled);
 	}
 	if (role) CFRelease(role);
-	if (subrole) CFRelease(subrole);
 	if (title) CFRelease(title);
 	if (enabled) CFRelease(enabled);
 	if (value) CFRelease(value);
@@ -614,12 +617,10 @@ static int cu_ax_contains(AXUIElementRef element, AXUIElementRef wanted, int dep
 	if (!element || depth > 16 || *budget <= 0 || cu_cancelled(flag)) return 0;
 	(*budget)--;
 	AXUIElementSetMessagingTimeout(element, 0.3);
-	CFTypeRef role = NULL, subrole = NULL;
+	CFTypeRef role = NULL;
 	AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role);
-	AXUIElementCopyAttributeValue(element, kAXSubroleAttribute, &subrole);
-	int secure = cu_ax_secure_or_unknown(role, subrole);
+	int secure = cu_ax_read_block(element, role) != NULL;
 	if (role) CFRelease(role);
-	if (subrole) CFRelease(subrole);
 	if (secure) return 0;
 	if (CFEqual(element, wanted)) return 1;
 	CFTypeRef children = NULL;
@@ -738,6 +739,18 @@ int cu_point_classify_test(int found, int metadata, int overlap, int hit, const 
 	return 0;
 }
 
+int cu_ax_block_reason_test(const char *role, const char *subrole, int response, const char **out) {
+	if (!out) return -1;
+	CFStringRef r = role ? CFStringCreateWithCString(NULL, role, kCFStringEncodingUTF8) : NULL;
+	CFStringRef s = subrole ? CFStringCreateWithCString(NULL, subrole, kCFStringEncodingUTF8) : NULL;
+	AXError rc = response == 0 ? kAXErrorSuccess : response == 1 ? kAXErrorNoValue : response == 2 ? kAXErrorAttributeUnsupported : kAXErrorCannotComplete;
+	const char *reason = cu_ax_block_reason(r, s, rc);
+	*out = reason ? reason : "";
+	if (r) CFRelease(r);
+	if (s) CFRelease(s);
+	return 0;
+}
+
 
 // A container hit is ambiguous: it may hide a protected descendant that the
 // target application did not expose. Never inject into an ambiguous container.
@@ -813,14 +826,12 @@ static AXUIElementRef cu_ax_find_control_at_point(AXUIElementRef element, CGPoin
 	if (!element || depth > 16 || *budget <= 0 || cu_cancelled(flag)) return NULL;
 	(*budget)--;
 	AXUIElementSetMessagingTimeout(element, 0.3);
-	CFTypeRef role = NULL, subrole = NULL;
+	CFTypeRef role = NULL;
 	AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role);
-	AXUIElementCopyAttributeValue(element, kAXSubroleAttribute, &subrole);
-	int secure = cu_ax_secure_or_unknown(role, subrole);
+	int secure = cu_ax_read_block(element, role) != NULL;
 	int text = cu_ax_text_role(role);
 	int button = role && CFGetTypeID(role) == CFStringGetTypeID() && CFEqual(role, CFSTR("AXButton"));
 	if (role) CFRelease(role);
-	if (subrole) CFRelease(subrole);
 	if (secure) return NULL;
 	if (text || button) {
 		CGRect bounds;
@@ -881,10 +892,9 @@ static int cu_probe_point(cu_window selected, AXUIElementRef expected, CGRect bo
 	for (int i=0; node && i<32 && !cu_cancelled(flag); i++) {
 		if (AXUIElementGetPid(node,&pid) != kAXErrorSuccess || pid != selected.pid) break;
 		AXUIElementSetMessagingTimeout(node,0.3);
-		CFTypeRef role=NULL, sub=NULL;
+		CFTypeRef role=NULL;
 		AXUIElementCopyAttributeValue(node,kAXRoleAttribute,&role);
-		AXUIElementCopyAttributeValue(node,kAXSubroleAttribute,&sub);
-		const char *reason = cu_ax_block_reason(role, sub);
+		const char *reason = cu_ax_read_block(node, role);
 		if (safe && reason) {
 			safe = 0;
 			snprintf(out->block, sizeof(out->block), "%s_%s", i ? "ancestor" : "control", reason);
@@ -898,7 +908,6 @@ static int cu_probe_point(cu_window selected, AXUIElementRef expected, CGRect bo
 			else if (CFEqual(role,CFSTR("AXWebArea"))) label="AXWebArea";
 		}
 		if (role) CFRelease(role);
-		if (sub) CFRelease(sub);
 		if (CFEqual(node,expected)) { out->member=1; break; }
 		CFTypeRef parent=NULL;
 		if (AXUIElementCopyAttributeValue(node,kAXParentAttribute,&parent)!=kAXErrorSuccess || !parent || CFGetTypeID(parent)!=AXUIElementGetTypeID()) { if (parent) CFRelease(parent); break; }
@@ -1009,12 +1018,12 @@ static int cu_press_frame(cu_window selected, AXUIElementRef expected, double bx
 	AXUIElementRef window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	CGPoint reviewedPoint = CGPointMake(bx + flag->px*bw, by + flag->py*bh);
-	int ok = flag->coordinate ? cu_point_unobscured(selected, expected, reviewedPoint, flag) : cu_focused_control_safe(selected, window, flag);
+	int ok = (!flag->coordinate || cu_point_unobscured(selected, expected, reviewedPoint, flag)) && cu_focused_control_safe(selected, window, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag)) return 0;
 	window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
-	ok = flag->coordinate ? cu_point_unobscured(selected, expected, reviewedPoint, flag) : cu_focused_control_safe(selected, window, flag);
+	ok = (!flag->coordinate || cu_point_unobscured(selected, expected, reviewedPoint, flag)) && cu_focused_control_safe(selected, window, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
 	CGEventRef down = CGEventCreateKeyboardEvent(NULL, code, true);
@@ -1036,22 +1045,19 @@ static AXUIElementRef cu_text_frame_control(cu_window selected, AXUIElementRef e
 	AXUIElementRef window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return NULL; }
 	if (flag->coordinate) {
-		// The user chose graphical fallback when no AX text control exists. It
-		// still requires this exact focused window and the reviewed point to stay
-		// unobscured; typed text itself cannot be verified by AX.
+		// A reviewed graphical click is not proof of the keyboard destination.
+		// Continue through the focused-field check before agent text input.
 		CGPoint point = CGPointMake(bounds.origin.x + flag->px*bounds.size.width, bounds.origin.y + flag->py*bounds.size.height);
 		if (!cu_point_unobscured(selected, expected, point, flag)) { CFRelease(window); return NULL; }
-		return window;
 	}
-	// A person can type into their chosen opaque canvas. This path is not
-	// reachable from ordinary Agent calls without the coordinate fallback.
+	// A person can type into their chosen opaque canvas.
 	if (operator) {
 		if (!cu_window_visible_here(selected)) { CFRelease(window); return NULL; }
 		return window;
 	}
 	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
 	if (app) AXUIElementSetMessagingTimeout(app, 0.5);
-	CFTypeRef focused = NULL, role = NULL, subrole = NULL, enabled = NULL;
+	CFTypeRef focused = NULL, role = NULL, enabled = NULL;
 	int ok = app && AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &focused) == kAXErrorSuccess &&
 		focused && CFGetTypeID(focused) == AXUIElementGetTypeID();
 	AXUIElementRef element = (AXUIElementRef)focused;
@@ -1061,7 +1067,7 @@ static AXUIElementRef cu_text_frame_control(cu_window selected, AXUIElementRef e
 		AXUIElementSetMessagingTimeout(element, 0.5);
 		ok = AXUIElementGetPid(element, &pid) == kAXErrorSuccess && pid == selected.pid &&
 			AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role) == kAXErrorSuccess && cu_ax_text_role(role) &&
-			AXUIElementCopyAttributeValue(element, kAXSubroleAttribute, &subrole) == kAXErrorSuccess && !cu_ax_secure_or_unknown(role, subrole) &&
+			!cu_ax_read_block(element, role) &&
 			AXUIElementCopyAttributeValue(element, kAXEnabledAttribute, &enabled) == kAXErrorSuccess &&
 			enabled && CFGetTypeID(enabled) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)enabled) &&
 			cu_ax_contains(window, element, 0, &budget, flag) && cu_focused_control_safe(selected, window, flag);
@@ -1069,7 +1075,6 @@ static AXUIElementRef cu_text_frame_control(cu_window selected, AXUIElementRef e
 	if (ok) CFRetain(element);
 	if (focused) CFRelease(focused);
 	if (role) CFRelease(role);
-	if (subrole) CFRelease(subrole);
 	if (enabled) CFRelease(enabled);
 	if (app) CFRelease(app);
 	CFRelease(window);
@@ -1081,7 +1086,6 @@ static AXUIElementRef cu_text_frame_control(cu_window selected, AXUIElementRef e
 // control and pinned window; no clipboard, shortcuts, or implicit submission.
 static int cu_type_text_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, const char *text, size_t length, cu_cancel_flag *flag, int operator) {
 	if (!text || length == 0 || length > 4096 || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || bw <= 0 || bh <= 0) return 0;
-	if (flag->coordinate) operator = 1;
 	CFStringRef value = CFStringCreateWithBytes(NULL, (const UInt8 *)text, (CFIndex)length, kCFStringEncodingUTF8, false);
 	if (!value) return 0;
 	CGRect bounds = CGRectMake(bx, by, bw, bh);

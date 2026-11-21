@@ -120,6 +120,9 @@ func (s *Session) inspectPoint(ctx context.Context, prepare bool, id string, x, 
 		}
 		var err error
 		out, err = probe.InspectPoint(ctx, t, lease.token, x/float64(lease.width), y/float64(lease.height))
+		if err == nil && prepare && out.WindowVerified && (out.ControlBlock == "control_secure_field" || out.ControlBlock == "ancestor_secure_field") && !isOperatorContext(ctx) {
+			return s.pauseForPassword()
+		}
 		if err != nil || !prepare || out.PointUnobscured || out.InputBound || (out.PointVerification != "foreign_hit" && out.PointVerification != "target_not_visible") {
 			return err
 		}
