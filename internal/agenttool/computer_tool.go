@@ -75,7 +75,30 @@ func (*ComputerTool) ExecutionMode() agentcore.ToolExecutionMode {
 const computerValidationSchema = `{"type":"object","additionalProperties":false,"required":["action"],"properties":{"action":{"type":"string","enum":["status","snapshot","screenshot","inspect_point","prepare_point","click","click_at","fill","replace","type_text","press","scroll","close_window","pause","stop"]},"context_tiles":{"type":"array","items":{"type":"integer","minimum":0,"maximum":15},"maxItems":16,"description":"inspect_point or prepare_point: tiles covering relevant context in the reviewed screenshot (4x4, numbered 0-15 row-major from top left). Include the conversation identity and pending content for a send; target point tile included automatically. Omit for diagnostic-only inspection."},"snapshot_id":{"type":"string","description":"Current snapshot identity."},"ref":{"type":"string","description":"Element ref from the current snapshot."},"frame_id":{"type":"string","description":"Recent screenshot identity for frame input or point inspection."},"x":{"type":"number","description":"Horizontal pixel coordinate within that screenshot."},"y":{"type":"number","description":"Vertical pixel coordinate within that screenshot."},"key":{"type":"string","enum":["enter","tab","escape","backspace","delete","up","down","left","right","page_up","page_down","home","end","space"]},"delta_x":{"type":"integer","minimum":-5,"maximum":5},"delta_y":{"type":"integer","minimum":-5,"maximum":5},"text":{"type":"string","maxLength":4096,"description":"Text for fill or replace, or plain text inserted at the caret by type_text. type_text requires frame_id and a verified focused non-secure text control; no implicit Enter."}}}`
 
 func (t *ComputerTool) ValidationSchema() json.RawMessage {
-	return json.RawMessage(computerValidationSchema)
+	if t == nil || t.Session == nil || !t.Session.SupportsCoordinates() {
+		return json.RawMessage(computerValidationSchema)
+	}
+	var doc map[string]any
+	if json.Unmarshal([]byte(computerValidationSchema), &doc) != nil {
+		return json.RawMessage(computerValidationSchema)
+	}
+	properties, _ := doc["properties"].(map[string]any)
+	action, _ := properties["action"].(map[string]any)
+	if action == nil {
+		return json.RawMessage(computerValidationSchema)
+	}
+	values, _ := action["enum"].([]any)
+	for _, value := range values {
+		if value == "type_at" {
+			return json.RawMessage(computerValidationSchema)
+		}
+	}
+	action["enum"] = append(values, "type_at")
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return json.RawMessage(computerValidationSchema)
+	}
+	return data
 }
 
 func (t *ComputerTool) Schema() json.RawMessage {
