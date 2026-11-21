@@ -315,7 +315,9 @@ static void cu_attach_auth(CGEventRef event, pid_t pid) {
 		cls = objc_getClass("SLSEventAuthenticationMessage");
 		sel = sel_registerName("messageWithEventRecord:pid:version:");
 	}
-	if (!cls || !class_respondsToSelector(cls, sel)) return;
+	// class_respondsToSelector reports false for this class on macOS 27 even
+	// though the factory exists; class_getClassMethod is authoritative.
+	if (!cls || !class_getClassMethod(cls, sel)) return;
 	void *record = cu_event_record(event);
 	if (!record) return;
 	id message = ((id (*)(id, SEL, void *, int32_t, uint32_t))objc_msgSend)((id)cls, sel, record, (int32_t)pid, 0);
@@ -335,6 +337,44 @@ static void cu_post_key(pid_t pid, CGEventRef event) {
 }
 static void cu_post_mouse(pid_t pid, CGEventRef event) {
 	cu_post_event(pid, event);
+}
+
+// Diagnostics for native tests: bit 1 class, 2 selector, 4 setter, 8 record,
+// 16 authentication message attached.
+int cu_auth_probe(void) {
+	int bits = 0;
+	Class cls = objc_getClass("SLSEventAuthenticationMessage");
+	SEL sel = sel_registerName("messageWithEventRecord:pid:version:");
+	if (cls) bits |= 1;
+	if (cls && class_getClassMethod(cls, sel)) bits |= 2;
+	if (cu_set_auth()) bits |= 4;
+	CGEventRef event = CGEventCreateKeyboardEvent(NULL, 0, true);
+	if (event) {
+		if (cu_event_record(event)) bits |= 8;
+		cu_attach_auth(event, getpid());
+		typedef id (*cu_get_auth_fn)(CGEventRef);
+		cu_get_auth_fn get = (cu_get_auth_fn)dlsym(cu_skylight(), "SLEventGetAuthenticationMessage");
+		if (get && get(event)) bits |= 16;
+		CFRelease(event);
+	}
+	return bits;
+}
+
+int cu_auth_methods(char *out, size_t length) {
+	Class cls = objc_getClass("SLSEventAuthenticationMessage");
+	if (!cls || !out || length == 0) return 0;
+	Class meta = object_getClass((id)cls);
+	unsigned int count = 0;
+	Method *methods = class_copyMethodList(meta, &count);
+	if (!methods) return 0;
+	size_t used = 0;
+	for (unsigned int i = 0; i < count; i++) {
+		const char *name = sel_getName(method_getName(methods[i]));
+		int n = snprintf(out + used, length - used, "%s\n", name);
+		if (n > 0 && (size_t)n < length - used) used += (size_t)n;
+	}
+	free(methods);
+	return (int)used;
 }
 
 static int cu_ax_list_result(AXError error, int has_value, int is_array) {
