@@ -119,7 +119,7 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 		}
 	}()
 	go func() {
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			action := "status"
@@ -370,6 +370,8 @@ type operatorPaneKey struct {
 	scroll                int
 	graphics, hasFrame    bool
 	frameHash             [sha256.Size]byte
+	frameAge              int64
+	frameStale            bool
 	width, height         int
 }
 
@@ -396,6 +398,10 @@ func (d *operatorPaneDisplay) draw(out io.Writer, renderer *KittyRenderer, state
 	key.hasFrame = !state.semantic && !state.localPaused && state.frame != nil && state.graphics && height > 4
 	if key.hasFrame {
 		key.frameHash = sha256.Sum256(state.frame.PNG)
+		if !state.frame.CapturedAt.IsZero() {
+			key.frameAge = int64(time.Since(state.frame.CapturedAt).Seconds())
+		}
+		key.frameStale = state.frame.VisibilityKnown && !state.frame.OnScreen
 	}
 	if d.drawn && d.last == key {
 		return nil
@@ -432,7 +438,14 @@ func (d *operatorPaneDisplay) draw(out io.Writer, renderer *KittyRenderer, state
 	}
 	var text strings.Builder
 	text.WriteString("\x1b[2J\x1b[H")
-	fmt.Fprintf(&text, "%s\r\n", paneClip(fmt.Sprintf("Computer Use · %s · %s / %s", status, paneText(state.status.Target.Application), paneText(state.status.Target.Window)), width))
+	header := fmt.Sprintf("Computer Use · %s · %s / %s", status, paneText(state.status.Target.Application), paneText(state.status.Target.Window))
+	if state.frame != nil && !state.frame.CapturedAt.IsZero() {
+		header += " · last frame " + time.Since(state.frame.CapturedAt).Round(time.Second).String() + " ago"
+		if state.frame.VisibilityKnown && !state.frame.OnScreen {
+			header += " · another desktop, may be stale"
+		}
+	}
+	fmt.Fprintf(&text, "%s\r\n", paneClip(header, width))
 	if state.semantic {
 		lines := strings.Split(state.message, "\n")
 		start := min(state.scroll, len(lines))
