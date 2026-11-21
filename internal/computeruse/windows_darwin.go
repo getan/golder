@@ -1060,6 +1060,45 @@ static int cu_key_target_safe(cu_window selected, AXUIElementRef window, cu_canc
 	return ok;
 }
 
+// Focus a reviewed field without raising its app: one click is posted to the
+// target pid, then the app's focused element is required to become that exact
+// node. Web inputs often refuse AXFocused writes, so this is the only way to
+// put the caret in a background search box.
+static int cu_focus_field(cu_window selected, AXUIElementRef expected, AXUIElementRef element, cu_cancel_flag *flag) {
+	CGRect frame;
+	if (!cu_ax_geometry(element, &frame) || frame.size.width < 2 || frame.size.height < 2) { cu_stage(flag, "focus_frame"); return 0; }
+	AXUIElementRef window = cu_ax_window(selected, 0, flag);
+	int budget = 128;
+	int member = window && expected && CFEqual(window, expected) && cu_ax_contains(window, element, 0, &budget, flag);
+	if (window) CFRelease(window);
+	if (!member || cu_cancelled(flag)) { cu_stage(flag, "focus_member"); return 0; }
+	CGPoint center = CGPointMake(frame.origin.x + frame.size.width/2, frame.origin.y + frame.size.height/2);
+	CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, center, kCGMouseButtonLeft);
+	CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, center, kCGMouseButtonLeft);
+	if (!down || !up || cu_cancelled(flag)) { if (down) CFRelease(down); if (up) CFRelease(up); cu_stage(flag, "focus_event"); return 0; }
+	CGEventSetIntegerValueField(down, kCGMouseEventClickState, 1);
+	CGEventSetIntegerValueField(up, kCGMouseEventClickState, 1);
+	CGEventSetFlags(down, 0);
+	CGEventSetFlags(up, 0);
+	cu_post_key(selected.pid, down);
+	cu_post_key(selected.pid, up);
+	CFRelease(down);
+	CFRelease(up);
+	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
+	int focused = 0;
+	if (app) AXUIElementSetMessagingTimeout(app, 0.5);
+	for (int i = 0; app && i < 12 && !focused && !cu_cancelled(flag); i++) {
+		CFTypeRef current = NULL;
+		focused = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &current) == kAXErrorSuccess &&
+			current && CFEqual(current, element);
+		if (current) CFRelease(current);
+		if (!focused) usleep(25000);
+	}
+	if (app) CFRelease(app);
+	if (!focused) cu_stage(flag, "focus_click");
+	return focused;
+}
+
 static int cu_press_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, uint16_t code, cu_cancel_flag *flag) {
 	if (!expected || cu_cancelled(flag) || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || bw <= 0 || bh <= 0) { cu_stage(flag, "press_args"); return 0; }
 	CGRect bounds;
@@ -1266,20 +1305,15 @@ static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElement
 		if (member && !cu_cancelled(flag)) {
 			AXUIElementRef currentApp = AXUIElementCreateApplication(selected.pid);
 			int focusedNow = 0;
-			for (int i = 0; currentApp && i < 12 && !focusedNow && !cu_cancelled(flag); i++) {
+			if (currentApp) {
+				AXUIElementSetMessagingTimeout(currentApp, 0.5);
 				CFTypeRef current = NULL;
 				focusedNow = AXUIElementCopyAttributeValue(currentApp, kAXFocusedUIElementAttribute, &current) == kAXErrorSuccess &&
 					current && CFEqual(current, target);
 				if (current) CFRelease(current);
-				if (!focusedNow && i == 0 && resolved) break; // never focus an unsure web node
-				if (!focusedNow && i == 0) {
-					Boolean settable = false;
-					if (cu_cancelled(flag) || AXUIElementIsAttributeSettable(target, kAXFocusedAttribute, &settable) != kAXErrorSuccess || !settable ||
-						AXUIElementSetAttributeValue(target, kAXFocusedAttribute, kCFBooleanTrue) != kAXErrorSuccess) break;
-				}
-				if (!focusedNow) usleep(25000);
+				CFRelease(currentApp);
 			}
-			if (currentApp) CFRelease(currentApp);
+			if (!focusedNow && !cu_cancelled(flag)) focusedNow = cu_focus_field(selected, expected, target, flag);
 			if (!focusedNow) {
 				cu_stage(flag, "submit_focus");
 				result = -3; // no Return posted
@@ -1323,20 +1357,15 @@ static int cu_ax_replace(cu_window selected, AXUIElementRef expected, AXUIElemen
 	if (!member || cu_cancelled(flag)) { cu_stage(flag, "replace_member"); return 0; }
 	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
 	int focused = 0;
-	if (app) AXUIElementSetMessagingTimeout(app, 0.5);
-	for (int i = 0; app && i < 12 && !focused && !cu_cancelled(flag); i++) {
+	if (app) {
+		AXUIElementSetMessagingTimeout(app, 0.5);
 		CFTypeRef current = NULL;
 		focused = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &current) == kAXErrorSuccess &&
 			current && CFEqual(current, element);
 		if (current) CFRelease(current);
-		if (!focused && i == 0) {
-			Boolean settable = false;
-			if (cu_cancelled(flag) || AXUIElementIsAttributeSettable(element, kAXFocusedAttribute, &settable) != kAXErrorSuccess || !settable ||
-				AXUIElementSetAttributeValue(element, kAXFocusedAttribute, kCFBooleanTrue) != kAXErrorSuccess) break;
-		}
-		if (!focused) usleep(25000);
+		CFRelease(app);
 	}
-	if (app) CFRelease(app);
+	if (!focused && !cu_cancelled(flag)) focused = cu_focus_field(selected, expected, element, flag);
 	if (!focused || cu_cancelled(flag)) { cu_stage(flag, "replace_focus"); return -3; }
 	CGEventRef selectDown = CGEventCreateKeyboardEvent(NULL, 0, true);
 	CGEventRef selectUp = CGEventCreateKeyboardEvent(NULL, 0, false);
@@ -1842,9 +1871,6 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 	if action == "submit" {
 		return routeFieldSubmit(func() error { return c.actNative(ctx, target, snapshotID, ref, action, text, false) }, func() error {
 			return c.actNative(ctx, target, snapshotID, ref, action, text, true)
-		}, func() error {
-			_, err := c.PrepareForeground(ctx, target)
-			return err
 		})
 	}
 	return c.actNative(ctx, target, snapshotID, ref, action, text, false)
