@@ -961,10 +961,8 @@ static int cu_click_frame(cu_window selected, AXUIElementRef expected, double bx
 	CGEventSetIntegerValueField(up, kCGMouseEventClickState, 1);
 	CGEventSetFlags(down, 0);
 	CGEventSetFlags(up, 0);
-	// cu_focused_control_safe proved the target window is frontmost and the
-	// exact reviewed control has keyboard focus, so HID delivery is addressed.
-	CGEventPost(kCGHIDEventTap, down);
-	CGEventPost(kCGHIDEventTap, up);
+	CGEventPostToPid(selected.pid, down);
+	CGEventPostToPid(selected.pid, up);
 	CFRelease(down);
 	CFRelease(up);
 	return 1; // dispatched, not proof that the app acted on the event
@@ -1168,25 +1166,34 @@ static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementR
 	return rc == -2 ? 0 : rc;
 }
 
-static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElementRef element, cu_cancel_flag *flag) {
+static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElementRef element, cu_cancel_flag *flag, int keyboard) {
 	CFTypeRef role = NULL;
 	int field = element && AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role) == kAXErrorSuccess &&
 		role && CFEqual(role, CFSTR("AXTextField"));
 	if (role) CFRelease(role);
 	if (!field) return 0;
-	int rc = cu_ax_invoke(selected, expected, element, kAXConfirmAction, flag);
-	if (rc != -2) return rc; // never try Return after any attempted AXConfirm
-	// No AXConfirm: focus this exact field, then let cu_press_frame verify the
-	// focused control and window before sending one HID Return.
-	AXUIElementRef window = cu_ax_window(selected, 0, flag);
-	Boolean settable = false;
-	int focused = window && expected && CFEqual(window, expected) && !cu_cancelled(flag) &&
-		AXUIElementIsAttributeSettable(element, kAXFocusedAttribute, &settable) == kAXErrorSuccess && settable &&
-		AXUIElementSetAttributeValue(element, kAXFocusedAttribute, kCFBooleanTrue) == kAXErrorSuccess;
+	if (!keyboard) return cu_ax_invoke(selected, expected, element, kAXConfirmAction, flag);
+	AXUIElementRef window = cu_ax_window(selected, 1, flag);
 	int budget = 128;
-	if (focused) focused = cu_ax_contains(window, element, 0, &budget, flag);
+	int member = window && expected && CFEqual(window, expected) && cu_ax_contains(window, element, 0, &budget, flag);
 	if (window) CFRelease(window);
-	if (!focused || cu_cancelled(flag)) return 0;
+	if (!member || cu_cancelled(flag)) return 0;
+	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
+	int focused = 0;
+	for (int i = 0; app && i < 12 && !focused && !cu_cancelled(flag); i++) {
+		CFTypeRef current = NULL;
+		focused = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &current) == kAXErrorSuccess &&
+			current && CFEqual(current, element);
+		if (current) CFRelease(current);
+		if (!focused && i == 0) {
+			Boolean settable = false;
+			if (cu_cancelled(flag) || AXUIElementIsAttributeSettable(element, kAXFocusedAttribute, &settable) != kAXErrorSuccess || !settable ||
+				AXUIElementSetAttributeValue(element, kAXFocusedAttribute, kCFBooleanTrue) != kAXErrorSuccess) break;
+		}
+		if (!focused) usleep(25000);
+	}
+	if (app) CFRelease(app);
+	if (!focused || cu_cancelled(flag)) return -3; // no Return posted
 	CGRect b;
 	if (cu_cancelled(flag) || !cu_current_bounds(selected, &b)) return 0;
 	flag->reviewed = element; // cu_press_frame requires this exact focused control twice
@@ -1652,12 +1659,15 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 		return ErrNotAllowed
 	}
 	if action == "submit" {
-		// Keyboard submission requires this exact window frontmost. Restore it
-		// before taking c.mu; identity and geometry are rechecked afterwards.
-		if _, err := c.PrepareForeground(ctx, target); err != nil {
-			return noInputError(err)
-		}
+		return routeFieldSubmit(func() error { return c.actNative(ctx, target, snapshotID, ref, action, text, false) }, func() error {
+			_, err := c.PrepareForeground(ctx, target)
+			return err
+		}, func() error { return c.actNative(ctx, target, snapshotID, ref, action, text, true) })
 	}
+	return c.actNative(ctx, target, snapshotID, ref, action, text, false)
+}
+
+func (c *MacWindowCatalog) actNative(ctx context.Context, target Target, snapshotID, ref, action, text string, keyboard bool) error {
 	if err := c.Validate(ctx, target, true); err != nil {
 		return noInputValidationError(err)
 	}
@@ -1683,7 +1693,11 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 	if action == "click" {
 		performed = C.cu_ax_press(window, c.pinned[target.ID], element, flag)
 	} else if action == "submit" {
-		performed = C.cu_ax_submit(window, c.pinned[target.ID], element, flag)
+		var mode C.int
+		if keyboard {
+			mode = 1
+		}
+		performed = C.cu_ax_submit(window, c.pinned[target.ID], element, flag, mode)
 	} else {
 		value := C.CString(text)
 		performed = C.cu_ax_fill(window, c.pinned[target.ID], element, value, C.size_t(len(text)), flag)
@@ -1693,10 +1707,18 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 		<-done
 	}
 	C.free(unsafe.Pointer(flag))
-	c.clearSnapshotLocked()
+	if performed != -2 {
+		c.clearSnapshotLocked()
+	}
 	c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if performed == -2 {
+		return errNoConfirmAction
+	}
+	if performed == -3 {
+		return inputRefused(ctx, func() error { return c.Validate(ctx, target, false) }, staleReason("field_focus_unconfirmed", "the selected field did not acquire keyboard focus; Return was not sent"))
 	}
 	if performed == 0 {
 		return semanticInputRefused(ctx, func() error { return c.Validate(ctx, target, false) })
