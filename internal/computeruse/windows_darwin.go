@@ -1636,6 +1636,33 @@ static int cu_ax_submit(cu_window selected, AXUIElementRef expected, AXUIElement
 	return result;
 }
 
+// Chromium may stop painting a window that is not visible (including another
+// Space) after it accepts input. A one-pixel scroll down and back asks the
+// renderer to commit a frame without switching Spaces or navigating.
+static void cu_repaint_nudge(cu_window selected) {
+	CGRect bounds;
+	if (!cu_current_bounds(selected, &bounds)) return;
+	CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
+	if (!source) return;
+	CGPoint point = CGPointMake(bounds.origin.x + bounds.size.width/2, bounds.origin.y + bounds.size.height/2);
+	for (int delta = 1; delta >= -1; delta -= 2) {
+		CGEventRef event = CGEventCreateScrollWheelEvent(source, kCGScrollEventUnitPixel, 1, delta);
+		if (!event) continue;
+		CGEventSetLocation(event, point);
+		cu_set_int_field_fn setint = cu_set_int_field();
+		if (setint) {
+			setint(event, 40, selected.pid);
+			setint(event, 51, selected.window_id);
+			setint(event, 91, selected.window_id);
+			setint(event, 92, selected.window_id);
+		}
+		cu_post_mouse(selected.pid, event);
+		CFRelease(event);
+		usleep(30000);
+	}
+	CFRelease(source);
+}
+
 // Replaces a web text field through real key events: select all, then type.
 // Chromium ignores AXValue writes, but accepts per-pid key delivery.
 static int cu_ax_replace(cu_window selected, AXUIElementRef expected, AXUIElementRef element, const char *text, size_t length, cu_cancel_flag *flag) {
@@ -1708,6 +1735,7 @@ static int cu_ax_replace(cu_window selected, AXUIElementRef expected, AXUIElemen
 		sent = 1;
 		offset += count;
 	}
+	if (sent) cu_repaint_nudge(selected);
 	return sent;
 }
 

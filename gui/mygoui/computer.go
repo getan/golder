@@ -463,6 +463,7 @@ func (a *App) startComputerPreview() {
 		view := computeruse.NewOperatorView(session)
 		var lastDigest [sha256.Size]byte
 		var lastBitmap *ui.Bitmap
+		var changedAt time.Time
 		haveDigest := false
 		for {
 			if !session.Status().Active {
@@ -487,6 +488,7 @@ func (a *App) startComputerPreview() {
 						bitmap = ui.NewBitmap(image)
 						lastBitmap = bitmap
 						lastDigest, haveDigest = digest, true
+						changedAt = time.Now()
 					}
 				}
 				win.Update(func() {
@@ -498,6 +500,7 @@ func (a *App) startComputerPreview() {
 							a.computerFrame = bitmap
 						}
 						a.computerFrameInfo = computeruse.Frame{ID: frame.ID, Width: frame.Width, Height: frame.Height, CapturedAt: frame.CapturedAt, OnScreen: frame.OnScreen, VisibilityKnown: frame.VisibilityKnown}
+						a.computerFrameChangedAt = changedAt
 						a.computerError = ""
 					} else if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, computeruse.ErrPaused) && !errors.Is(err, computeruse.ErrPreviewBusy) {
 						a.computerFrameInfo = computeruse.Frame{}
@@ -680,9 +683,9 @@ func (a *App) computerPanel(c *ui.Context) {
 				a.stopComputer()
 			}
 		})
-		if !a.computerFrameInfo.CapturedAt.IsZero() {
-			age := time.Since(a.computerFrameInfo.CapturedAt).Round(time.Second)
-			label := "Last frame " + age.String() + " ago"
+		if !a.computerFrameChangedAt.IsZero() {
+			age := time.Since(a.computerFrameChangedAt).Round(time.Second)
+			label := "Preview last changed " + age.String() + " ago"
 			color := t.TextMuted
 			if a.computerFrameInfo.VisibilityKnown && !a.computerFrameInfo.OnScreen {
 				label += " · window is on another desktop; this image may be stale"

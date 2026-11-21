@@ -28,14 +28,15 @@ type paneViewerEvent struct {
 }
 
 type paneViewerState struct {
-	status      Status
-	frame       *Frame
-	message     string
-	input       string
-	semantic    bool
-	localPaused bool
-	scroll      int
-	graphics    bool
+	status         Status
+	frame          *Frame
+	frameChangedAt time.Time
+	message        string
+	input          string
+	semantic       bool
+	localPaused    bool
+	scroll         int
+	graphics       bool
 }
 
 // RunOperatorPane is the internal child entry point for the dedicated tuios
@@ -225,6 +226,9 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 				}
 			}
 			if event.action == "frame" && !state.localPaused && !localInputPending && event.response.Frame != nil {
+				if state.frame == nil || sha256.Sum256(state.frame.PNG) != sha256.Sum256(event.response.Frame.PNG) {
+					state.frameChangedAt = time.Now()
+				}
 				state.frame = event.response.Frame
 			}
 			if event.action == "click_at" || event.action == "type_text" {
@@ -398,8 +402,8 @@ func (d *operatorPaneDisplay) draw(out io.Writer, renderer *KittyRenderer, state
 	key.hasFrame = !state.semantic && !state.localPaused && state.frame != nil && state.graphics && height > 4
 	if key.hasFrame {
 		key.frameHash = sha256.Sum256(state.frame.PNG)
-		if !state.frame.CapturedAt.IsZero() {
-			key.frameAge = int64(time.Since(state.frame.CapturedAt).Seconds())
+		if !state.frameChangedAt.IsZero() {
+			key.frameAge = int64(time.Since(state.frameChangedAt).Seconds())
 		}
 		key.frameStale = state.frame.VisibilityKnown && !state.frame.OnScreen
 	}
@@ -439,8 +443,8 @@ func (d *operatorPaneDisplay) draw(out io.Writer, renderer *KittyRenderer, state
 	var text strings.Builder
 	text.WriteString("\x1b[2J\x1b[H")
 	header := fmt.Sprintf("Computer Use · %s · %s / %s", status, paneText(state.status.Target.Application), paneText(state.status.Target.Window))
-	if state.frame != nil && !state.frame.CapturedAt.IsZero() {
-		header += " · last frame " + time.Since(state.frame.CapturedAt).Round(time.Second).String() + " ago"
+	if state.frame != nil && !state.frameChangedAt.IsZero() {
+		header += " · preview changed " + time.Since(state.frameChangedAt).Round(time.Second).String() + " ago"
 		if state.frame.VisibilityKnown && !state.frame.OnScreen {
 			header += " · another desktop, may be stale"
 		}

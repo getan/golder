@@ -246,6 +246,7 @@ type App struct {
 	computerRequestPicker    bool
 	computerFrame            *ui.Bitmap
 	computerFrameInfo        computeruse.Frame // metadata only; PNG lives in the local preview
+	computerFrameChangedAt   time.Time
 	computerTextDraft        string
 	computerInputBusy        bool
 	computerInputStop        context.CancelFunc
