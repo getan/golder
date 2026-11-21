@@ -28,6 +28,7 @@ void cu_stream_stop_all(void);
 int cu_capture_window_skylight(uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h);
 int cu_activate_pid(int32_t pid);
 int cu_frontmost_pid(void);
+int cu_host_app_pid(void);
 uint64_t cu_active_space(void);
 int cu_restore_space(uint64_t space);
 int cu_window_is_on_screen(uint32_t windowID, int32_t pid);
@@ -1887,7 +1888,7 @@ func NewMacWindowCatalog() *MacWindowCatalog {
 	return &MacWindowCatalog{
 		windows:   make(map[string]C.cu_window),
 		pinned:    make(map[string]C.AXUIElementRef),
-		homePID:   C.cu_frontmost_pid(),
+		homePID:   C.cu_host_app_pid(),
 		homeSpace: C.cu_active_space(),
 	}
 }

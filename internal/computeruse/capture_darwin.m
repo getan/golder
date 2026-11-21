@@ -14,6 +14,8 @@
 #include <stdatomic.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <sys/sysctl.h>
+#include <sys/types.h>
 
 // Keep system authorization surfaces, Golder, and terminal hosts out of both
 // application launch and window selection.
@@ -377,6 +379,29 @@ int cu_frontmost_pid(void) {
 		NSRunningApplication *app = [[NSWorkspace sharedWorkspace] frontmostApplication];
 		return app ? app.processIdentifier : 0;
 	}
+}
+
+// The regular macOS app that hosts this process: the Golder GUI itself, or the
+// terminal application that hosts the TUI. Walk the parent chain until an
+// NSApplicationActivationPolicyRegular process is found, so "home" does not
+// depend on which window happens to be frontmost when a session starts.
+int cu_host_app_pid(void) {
+	pid_t pid = getpid();
+	for (int depth = 0; depth < 10; depth++) {
+		@autoreleasepool {
+			NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+			if (app && app.activationPolicy == NSApplicationActivationPolicyRegular) return pid;
+		}
+		struct kinfo_proc info;
+		size_t size = sizeof(info);
+		int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+		if (sysctl(mib, 4, NULL, &size, NULL, 0) != 0 || size != sizeof(info)) return 0;
+		if (sysctl(mib, 4, &info, &size, NULL, 0) != 0) return 0;
+		pid_t parent = info.kp_eproc.e_ppid;
+		if (parent <= 1 || parent == pid) return 0;
+		pid = parent;
+	}
+	return 0;
 }
 
 int cu_activate_pid(int32_t pid) {
