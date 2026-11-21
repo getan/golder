@@ -54,10 +54,19 @@ type frameLease struct {
 // Frame is ephemeral. It must not be put into ordinary logs or persisted as a
 // session artifact without an explicit retention policy and user consent.
 type Frame struct {
-	ID     string
-	Width  int
-	Height int
-	PNG    []byte
+	ID              string
+	Width           int
+	Height          int
+	PNG             []byte
+	CapturedAt      time.Time
+	OnScreen        bool
+	VisibilityKnown bool
+}
+
+// A backend that can report whether the captured window is on the current
+// desktop; an off-screen frame may be the last composited image.
+type WindowVisibility interface {
+	WindowOnScreen(context.Context, Target) (bool, error)
 }
 
 func (s *Session) SupportsCapture() bool {
@@ -117,6 +126,12 @@ func (s *Session) capture(ctx context.Context, preview bool) (Frame, error) {
 			return err
 		}
 		frame = Frame{ID: hex.EncodeToString(nonce[:]), Width: cfg.Width, Height: cfg.Height, PNG: raw}
+		frame.CapturedAt = time.Now()
+		if visibility, ok := backend.(WindowVisibility); ok {
+			if on, err := visibility.WindowOnScreen(ctx, target); err == nil {
+				frame.OnScreen, frame.VisibilityKnown = on, true
+			}
+		}
 		if (!preview || isOperatorContext(ctx)) && token != "" && len(token) <= maxFrameTokenBytes {
 			s.mu.Lock()
 			if err := ctx.Err(); err != nil || !s.status.Active || (s.status.Paused && !isOperatorContext(ctx)) || s.status.Target.ID != target.ID {

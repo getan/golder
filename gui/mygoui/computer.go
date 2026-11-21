@@ -458,7 +458,7 @@ func (a *App) startComputerPreview() {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.computerPreviewStop = cancel
 	go func() {
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		view := computeruse.NewOperatorView(session)
 		var lastDigest [sha256.Size]byte
@@ -497,7 +497,7 @@ func (a *App) startComputerPreview() {
 						if bitmap != nil {
 							a.computerFrame = bitmap
 						}
-						a.computerFrameInfo = computeruse.Frame{ID: frame.ID, Width: frame.Width, Height: frame.Height}
+						a.computerFrameInfo = computeruse.Frame{ID: frame.ID, Width: frame.Width, Height: frame.Height, CapturedAt: frame.CapturedAt, OnScreen: frame.OnScreen, VisibilityKnown: frame.VisibilityKnown}
 						a.computerError = ""
 					} else if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, computeruse.ErrPaused) && !errors.Is(err, computeruse.ErrPreviewBusy) {
 						a.computerFrameInfo = computeruse.Frame{}
@@ -680,6 +680,16 @@ func (a *App) computerPanel(c *ui.Context) {
 				a.stopComputer()
 			}
 		})
+		if !a.computerFrameInfo.CapturedAt.IsZero() {
+			age := time.Since(a.computerFrameInfo.CapturedAt).Round(time.Second)
+			label := "Last frame " + age.String() + " ago"
+			color := t.TextMuted
+			if a.computerFrameInfo.VisibilityKnown && !a.computerFrameInfo.OnScreen {
+				label += " · window is on another desktop; this image may be stale"
+				color = t.Warning
+			}
+			ui.Text(c, label).Padding(0, 10).FontSize(10).TextColor(color)
+		}
 		if a.computerSession != nil {
 			if notice := a.computerSession.DesktopNotice(); notice != "" {
 				ui.Text(c, notice).Padding(6, 10).FontSize(10.5).TextColor(t.Warning).Wrap()

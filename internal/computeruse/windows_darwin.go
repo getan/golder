@@ -21,6 +21,7 @@ package computeruse
 #include <stdatomic.h>
 
 int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h, void *cancel);
+int cu_window_is_on_screen(uint32_t windowID, int32_t pid);
 int cu_app_allowed(int32_t pid);
 int cu_running_bundle(int32_t pid, char *out, size_t length);
 int cu_activate_running_app(int32_t pid, const char *expectedPath);
@@ -143,6 +144,28 @@ static int cu_window_visible_here(cu_window selected) {
 	}
 	CFRelease(list);
 	return found;
+}
+
+// Current-desktop visibility for preview freshness. A false result means a
+// captured frame may be the last composited image, not live content.
+int cu_window_is_on_screen(uint32_t windowID, int32_t pid) {
+	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, windowID);
+	if (!list) return 0;
+	int on = 0;
+	for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
+		CFDictionaryRef d = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
+		uint32_t id = 0;
+		int32_t owner = 0;
+		CFNumberRef n = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowNumber);
+		CFNumberRef p = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowOwnerPID);
+		if (n && p && CFNumberGetValue(n, kCFNumberSInt32Type, &id) && CFNumberGetValue(p, kCFNumberSInt32Type, &owner) &&
+			id == windowID && owner == pid) {
+			on = cu_window_on_screen(CFDictionaryGetValue(d, kCGWindowIsOnscreen));
+			break;
+		}
+	}
+	CFRelease(list);
+	return on;
 }
 
 enum {
@@ -2141,6 +2164,16 @@ func (c *MacWindowCatalog) CloseWindow(ctx context.Context, target Target) error
 func (c *MacWindowCatalog) Capture(ctx context.Context, target Target) ([]byte, error) {
 	data, _, err := c.CaptureBound(ctx, target)
 	return data, err
+}
+
+func (c *MacWindowCatalog) WindowOnScreen(ctx context.Context, target Target) (bool, error) {
+	c.mu.Lock()
+	window, ok := c.windows[target.ID]
+	c.mu.Unlock()
+	if !ok {
+		return false, ErrTargetLost
+	}
+	return C.cu_window_is_on_screen(window.window_id, window.pid) != 0, nil
 }
 
 type macFrameBinding struct {
