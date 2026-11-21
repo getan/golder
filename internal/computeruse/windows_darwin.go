@@ -2698,23 +2698,14 @@ func (c *MacWindowCatalog) restoreAfterForeground(previous C.int32_t, space C.ui
 		return
 	}
 	go func() {
-		start := time.Now()
-		stable := 0
-		for time.Now().Before(start.Add(3 * time.Second)) {
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
 			time.Sleep(150 * time.Millisecond)
-			if previous > 0 && C.cu_frontmost_pid() != previous {
+			if previous > 0 {
 				C.cu_activate_pid(previous)
 			}
 			if space != 0 && C.cu_active_space() != space {
 				C.cu_restore_space(space)
-			}
-			if (space == 0 || C.cu_active_space() == space) && (previous == 0 || C.cu_frontmost_pid() == previous) {
-				stable++
-				if stable >= 2 {
-					break
-				}
-			} else {
-				stable = 0
 			}
 		}
 	}()
