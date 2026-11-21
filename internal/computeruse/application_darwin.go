@@ -155,7 +155,27 @@ func (c *MacWindowCatalog) applicationsIn(ctx context.Context, requested string,
 // macApplicationLaunchArgs opens the exact catalogued app without replacing
 // the Golder GUI or terminal as the foreground application.
 func macApplicationLaunchArgs(path string) []string {
-	return []string{"-g", "-a", path}
+	args := []string{"-g", "-a", path}
+	if macApplicationIsChromium(path) {
+		// Without these, Chromium stops painting when its window is occluded or
+		// on another Space, so a background preview stays on the last frame.
+		args = append(args,
+			"--args",
+			"--disable-backgrounding-occluded-windows",
+			"--disable-renderer-backgrounding",
+			"--disable-background-timer-throttling",
+		)
+	}
+	return args
+}
+
+func macApplicationIsChromium(path string) bool {
+	for _, framework := range []string{"Electron Framework.framework", "Chromium Embedded Framework.framework"} {
+		if info, err := os.Stat(filepath.Join(path, "Contents", "Frameworks", framework)); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func macApplicationRevealArgs(path string) []string {

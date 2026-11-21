@@ -87,3 +87,21 @@ func TestMacApplicationLaunchDoesNotStealFrontendFocus(t *testing.T) {
 		t.Fatalf("reveal arguments = %q", got)
 	}
 }
+
+func TestMacApplicationLaunchAddsChromiumBackgroundFlags(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "Example.app")
+	if err := os.MkdirAll(filepath.Join(path, "Contents", "Frameworks", "Electron Framework.framework"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"-g", "-a", path,
+		"--args",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-renderer-backgrounding",
+		"--disable-background-timer-throttling",
+	}
+	if got := macApplicationLaunchArgs(path); !slices.Equal(got, want) {
+		t.Fatalf("open arguments = %q, want %q", got, want)
+	}
+}
