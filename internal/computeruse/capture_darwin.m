@@ -408,7 +408,20 @@ int cu_activate_pid(int32_t pid) {
 	@autoreleasepool {
 		NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:(pid_t)pid];
 		if (!app || app.terminated) return 0;
-		return [app activateWithOptions:0] ? 1 : 0;
+		if ([app activateWithOptions:(NSApplicationActivationOptions)(1 << 1)]) return 1;
+		// Fall back to WindowServer's front-process switch when AppKit ignores
+		// the activation (common for a background process on recent macOS).
+		void *handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
+		if (!handle) return 0;
+		typedef int (*set_front_fn)(const void *, uint32_t, uint32_t);
+		typedef int (*get_psn_fn)(pid_t, void *);
+		set_front_fn set_front = (set_front_fn)dlsym(handle, "SLPSSetFrontProcessWithOptions");
+		get_psn_fn get_psn = (get_psn_fn)dlsym(RTLD_DEFAULT, "GetProcessForPID");
+		unsigned char psn[8] = {0};
+		if (set_front && get_psn && get_psn((pid_t)pid, psn) == 0) {
+			return set_front(psn, 0, 0x400) == 0 ? 1 : 0;
+		}
+		return 0;
 	}
 }
 

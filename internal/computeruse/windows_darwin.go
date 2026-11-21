@@ -2408,6 +2408,12 @@ func (c *MacWindowCatalog) WindowOnScreen(ctx context.Context, target Target) (b
 	return C.cu_window_is_on_screen(window.window_id, window.pid) != 0, nil
 }
 
+func (c *MacWindowCatalog) HomeInfo() (int32, uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return int32(c.homePID), uint64(c.homeSpace)
+}
+
 type macFrameBinding struct {
 	Target string
 	X, Y   float64

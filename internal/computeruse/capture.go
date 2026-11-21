@@ -69,6 +69,26 @@ type WindowVisibility interface {
 	WindowOnScreen(context.Context, Target) (bool, error)
 }
 
+// HomeInfo exposes the operator's captured home app and Space for diagnostics.
+type HomeInfoProvider interface {
+	HomeInfo() (int32, uint64)
+}
+
+func (s *Session) HomeInfo() (int32, uint64, bool) {
+	if s == nil {
+		return 0, 0, false
+	}
+	s.mu.Lock()
+	backend := s.backend
+	s.mu.Unlock()
+	home, ok := backend.(HomeInfoProvider)
+	if !ok {
+		return 0, 0, false
+	}
+	pid, space := home.HomeInfo()
+	return pid, space, true
+}
+
 func (s *Session) SupportsCapture() bool {
 	if s == nil {
 		return false
