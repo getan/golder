@@ -1884,12 +1884,24 @@ type MacWindowCatalog struct {
 	homeSpace    C.uint64_t
 }
 
+// Captured once when the Golder process starts: for the TUI this is the
+// terminal hosting it, for the GUI the Golder process itself. Never derive
+// home from whichever app happens to be frontmost when a session is created.
+var (
+	initialFrontmostPID = C.cu_frontmost_pid()
+	initialSpace        = C.cu_active_space()
+)
+
 func NewMacWindowCatalog() *MacWindowCatalog {
+	home := C.cu_host_app_pid()
+	if home <= 0 {
+		home = initialFrontmostPID
+	}
 	return &MacWindowCatalog{
 		windows:   make(map[string]C.cu_window),
 		pinned:    make(map[string]C.AXUIElementRef),
-		homePID:   C.cu_host_app_pid(),
-		homeSpace: C.cu_active_space(),
+		homePID:   home,
+		homeSpace: initialSpace,
 	}
 }
 
