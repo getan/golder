@@ -1879,10 +1879,17 @@ type MacWindowCatalog struct {
 	layoutGate   func(context.Context) error
 	reviewed     macPointReview // at most one retained control per catalog, never exposed to the model
 	closed       bool
+	homePID      C.int32_t
+	homeSpace    C.uint64_t
 }
 
 func NewMacWindowCatalog() *MacWindowCatalog {
-	return &MacWindowCatalog{windows: make(map[string]C.cu_window), pinned: make(map[string]C.AXUIElementRef)}
+	return &MacWindowCatalog{
+		windows:   make(map[string]C.cu_window),
+		pinned:    make(map[string]C.AXUIElementRef),
+		homePID:   C.cu_frontmost_pid(),
+		homeSpace: C.cu_active_space(),
+	}
 }
 
 // EnableDesktopLayout is called only by the GUI after attaching the local
@@ -2643,6 +2650,12 @@ func (c *MacWindowCatalog) TypeAtFrame(ctx context.Context, target Target, token
 	}
 	previous := C.cu_frontmost_pid()
 	space := C.cu_active_space()
+	if previous <= 0 || previous == C.int32_t(window.pid) {
+		previous = c.homePID
+	}
+	if space == 0 {
+		space = c.homeSpace
+	}
 	C.cu_activate_pid(C.int32_t(window.pid))
 	time.Sleep(350 * time.Millisecond)
 	value := C.CString(text)
