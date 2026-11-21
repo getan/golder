@@ -554,6 +554,14 @@ static int cu_selected_focus(cu_window selected, AXUIElementRef expected, cu_can
 	return focused ? 1 : -1;
 }
 
+static int cu_raise_pinned(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag) {
+	AXUIElementRef window = cu_ax_window(selected, 0, flag);
+	int raised = window && expected && CFEqual(window, expected) && !cu_cancelled(flag) &&
+		AXUIElementPerformAction(window, kAXRaiseAction) == kAXErrorSuccess;
+	if (window) CFRelease(window);
+	return raised;
+}
+
 // Only a control operation may raise its own pinned window. Snapshot/capture
 // and the GUI preview do not call this, so reading cannot steal user focus.
 static int cu_focus_selected(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag, int operator) {
@@ -2038,6 +2046,16 @@ func (c *MacWindowCatalog) selectedFocus(ctx context.Context, target Target) (bo
 }
 
 func (c *MacWindowCatalog) focusSelected(ctx context.Context, target Target) error {
+	return c.restoreSelected(ctx, target, false)
+}
+
+func (c *MacWindowCatalog) PrepareForeground(ctx context.Context, target Target) (bool, error) {
+	return prepareInputFocus(ctx, 2*time.Second, 100*time.Millisecond,
+		func() (bool, error) { return c.selectedFocus(ctx, target) },
+		func() error { return c.restoreSelected(ctx, target, true) })
+}
+
+func (c *MacWindowCatalog) restoreSelected(ctx context.Context, target Target, allowTargetedRaise bool) error {
 	if err := c.Validate(ctx, target, true); err != nil {
 		return err
 	}
@@ -2055,7 +2073,12 @@ func (c *MacWindowCatalog) focusSelected(ctx context.Context, target Target) err
 	if isOperatorContext(ctx) {
 		operator = 1
 	}
-	if reason := C.cu_activation_reason(window, operator); reason != C.CU_FOCUS_SAFE {
+	reason := C.cu_activation_reason(window, operator)
+	// If app-wide activation risks bringing a different Space/window forward,
+	// request AXRaise only on the retained window. macOS may decline it; never
+	// activate the application as a fallback in that case.
+	targeted := allowTargetedRaise && (reason == C.CU_FOCUS_NOT_VISIBLE || reason == C.CU_FOCUS_OFFSCREEN_PEER)
+	if reason != C.CU_FOCUS_SAFE && !targeted {
 		c.mu.Unlock()
 		return macActivationError(int(reason))
 	}
@@ -2066,7 +2089,12 @@ func (c *MacWindowCatalog) focusSelected(ctx context.Context, target Target) err
 	}
 	done := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
-	raised := C.cu_focus_selected(window, c.pinned[target.ID], flag, operator)
+	var raised C.int
+	if targeted {
+		raised = C.cu_raise_pinned(window, c.pinned[target.ID], flag)
+	} else {
+		raised = C.cu_focus_selected(window, c.pinned[target.ID], flag, operator)
+	}
 	if !stop() {
 		<-done
 	}

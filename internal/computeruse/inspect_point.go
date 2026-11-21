@@ -68,6 +68,28 @@ func comparePointTile(before, after []byte, point [2]float64) string {
 type pointRegionsKey struct{}
 
 func (s *Session) InspectPoint(ctx context.Context, id string, x, y float64, contextTiles ...int) (PointInspection, error) {
+	return s.inspectPoint(ctx, false, id, x, y, contextTiles...)
+}
+
+type foregroundPreparer interface {
+	PrepareForeground(context.Context, Target) (changed bool, err error)
+}
+
+func (s *Session) SupportsPointPreparation() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.backend.(foregroundPreparer)
+	_, probe := s.backend.(pointInspector)
+	return ok && probe
+}
+
+// PreparePoint is control, unlike InspectPoint: a blocked physical target may
+// require raising the pinned window. Never carry a review across that change.
+func (s *Session) PreparePoint(ctx context.Context, id string, x, y float64, contextTiles ...int) (PointInspection, error) {
+	return s.inspectPoint(ctx, true, id, x, y, contextTiles...)
+}
+
+func (s *Session) inspectPoint(ctx context.Context, prepare bool, id string, x, y float64, contextTiles ...int) (PointInspection, error) {
 	var mask uint16
 	if len(contextTiles) > tileCount*tileCount {
 		return PointInspection{}, ErrNotAllowed
@@ -80,7 +102,7 @@ func (s *Session) InspectPoint(ctx context.Context, id string, x, y float64, con
 	}
 	ctx = context.WithValue(ctx, pointRegionsKey{}, mask)
 	var out PointInspection
-	err := s.Do(ctx, false, func(ctx context.Context, b Backend, t Target) error {
+	err := s.Do(ctx, prepare, func(ctx context.Context, b Backend, t Target) error {
 		probe, ok := b.(pointInspector)
 		if !ok {
 			return ErrUnavailable
@@ -97,7 +119,26 @@ func (s *Session) InspectPoint(ctx context.Context, id string, x, y float64, con
 		}
 		var err error
 		out, err = probe.InspectPoint(ctx, t, lease.token, x/float64(lease.width), y/float64(lease.height))
-		return err
+		if err != nil || !prepare || out.PointUnobscured || out.InputBound || (out.PointVerification != "foreign_hit" && out.PointVerification != "target_not_visible") {
+			return err
+		}
+		focus, ok := b.(foregroundPreparer)
+		if !ok {
+			return ErrUnavailable
+		}
+		changed, err := focus.PrepareForeground(ctx, t)
+		if changed {
+			s.mu.Lock()
+			s.frames, s.snapshot = nil, nil
+			s.mu.Unlock()
+		}
+		if err != nil {
+			return noInputError(err)
+		}
+		if changed {
+			return noInputError(staleReason("focus_restored", "the authorized window was brought forward; inspect a fresh frame"))
+		}
+		return nil
 	})
 	if err != nil {
 		return PointInspection{}, err
