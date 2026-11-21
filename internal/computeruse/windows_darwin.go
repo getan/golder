@@ -1550,7 +1550,7 @@ static int cu_type_unicode_raw(pid_t pid, const char *text, size_t length, cu_ca
 
 // One capture-bound pixel action: click the reviewed point, then type into the
 // focused field without requiring an AX text element.
-int cu_type_at_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, double nx, double ny, const char *text, size_t length, cu_cancel_flag *flag, int operator) {
+int cu_type_at_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, double nx, double ny, const char *text, size_t length, cu_cancel_flag *flag, int operator, int submit) {
 	if (cu_cancelled(flag)) return 0;
 	// Electron web content may not be visible at dispatch time. Use the
 	// window-local Chromium click path instead of the visible-point check;
@@ -1559,7 +1559,17 @@ int cu_type_at_frame(cu_window selected, AXUIElementRef expected, double bx, dou
 	CGPoint local = CGPointMake(nx*bw, ny*bh);
 	if (!cu_chromium_click(selected, screen, local, flag)) return 0;
 	usleep(60000);
-	return cu_type_unicode_raw(selected.pid, text, length, flag);
+	int typed = 1;
+	if (length > 0) typed = cu_type_unicode_raw(selected.pid, text, length, flag);
+	if (typed != 1 || !submit) return typed;
+	CGEventRef down = CGEventCreateKeyboardEvent(NULL, 36, true);
+	CGEventRef up = CGEventCreateKeyboardEvent(NULL, 36, false);
+	if (!down || !up) { if (down) CFRelease(down); if (up) CFRelease(up); return -1; }
+	cu_post_key(selected.pid, down);
+	cu_post_key(selected.pid, up);
+	CFRelease(down);
+	CFRelease(up);
+	return 1;
 }
 
 static int cu_ax_invoke(cu_window selected, AXUIElementRef expected, AXUIElementRef element, CFStringRef action, cu_cancel_flag *flag) {
@@ -2610,8 +2620,11 @@ func (c *MacWindowCatalog) TypeTextFrame(ctx context.Context, target Target, tok
 // and types there. It is the fallback for web contenteditable surfaces with no
 // AX text control; the previous Space and frontmost application are restored
 // afterwards.
-func (c *MacWindowCatalog) TypeAtFrame(ctx context.Context, target Target, token string, x, y float64, text string) error {
-	if !validFrameText(text) {
+func (c *MacWindowCatalog) TypeAtFrame(ctx context.Context, target Target, token string, x, y float64, text string, submit bool) error {
+	if text != "" && !validFrameText(text) {
+		return noInputError(ErrNotAllowed)
+	}
+	if text == "" && !submit {
 		return noInputError(ErrNotAllowed)
 	}
 	if err := c.Validate(ctx, target, false); err != nil {
@@ -2634,8 +2647,12 @@ func (c *MacWindowCatalog) TypeAtFrame(ctx context.Context, target Target, token
 	time.Sleep(350 * time.Millisecond)
 	value := C.CString(text)
 	defer C.free(unsafe.Pointer(value))
+	submitFlag := C.int(0)
+	if submit {
+		submitFlag = 1
+	}
 	err := c.sendFrame(ctx, target, binding, func(w C.cu_window, pinned C.AXUIElementRef, b macFrameBinding, flag *C.cu_cancel_flag) C.int {
-		return C.cu_type_at_frame(w, pinned, C.double(b.X), C.double(b.Y), C.double(b.W), C.double(b.H), C.double(x), C.double(y), value, C.size_t(len(text)), flag, 1)
+		return C.cu_type_at_frame(w, pinned, C.double(b.X), C.double(b.Y), C.double(b.W), C.double(b.H), C.double(x), C.double(y), value, C.size_t(len(text)), flag, 1, submitFlag)
 	})
 	c.restoreAfterForeground(previous, space)
 	return err

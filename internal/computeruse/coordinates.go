@@ -182,14 +182,17 @@ func (s *Session) TypeTextFrame(ctx context.Context, frameID, text string) error
 // requiring an AX text control. It is used for web contenteditable surfaces
 // such as Electron chat composers.
 type PointTypeBackend interface {
-	TypeAtFrame(context.Context, Target, string, float64, float64, string) error
+	TypeAtFrame(context.Context, Target, string, float64, float64, string, bool) error
 }
 
 // TypeAtFrame is the pixel-targeted text path. The frame lease binds the
 // target and geometry; the backend may bring the window forward briefly and
 // must restore the previous Space and frontmost application afterwards.
-func (s *Session) TypeAtFrame(ctx context.Context, frameID string, x, y float64, text string) error {
-	if !validFrameText(text) {
+func (s *Session) TypeAtFrame(ctx context.Context, frameID string, x, y float64, text string, submit bool) error {
+	if text != "" && !validFrameText(text) {
+		return noInputError(ErrNotAllowed)
+	}
+	if text == "" && !submit {
 		return noInputError(ErrNotAllowed)
 	}
 	return s.useFrame(ctx, frameID, x, y, true, func(ctx context.Context, backend FrameBoundBackend, target Target, lease frameLease) error {
@@ -197,7 +200,7 @@ func (s *Session) TypeAtFrame(ctx context.Context, frameID string, x, y float64,
 		if !ok {
 			return noInputError(ErrUnavailable)
 		}
-		return point.TypeAtFrame(ctx, target, lease.token, x, y, text)
+		return point.TypeAtFrame(ctx, target, lease.token, x, y, text, submit)
 	})
 }
 

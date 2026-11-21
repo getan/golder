@@ -265,13 +265,14 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 		if agentcore.SandboxRequestedFromContext(ctx) || seatbelt.ModeFromEnv() == seatbelt.ModeEnforce {
 			return errorResult("computer: desktop control cannot satisfy required OS containment"), nil
 		}
-		if args.SnapshotID != "" || args.Ref != "" || args.Key != "" || args.FrameID == "" || args.X == nil || args.Y == nil || args.Text == "" || args.DeltaX != 0 || args.DeltaY != 0 {
+		if args.SnapshotID != "" || args.Ref != "" || (args.Key != "" && args.Key != "enter") || args.FrameID == "" || args.X == nil || args.Y == nil || (args.Text == "" && args.Key != "enter") || args.DeltaX != 0 || args.DeltaY != 0 {
 			return errorResult("computer: type_at requires frame_id, x, y and text"), nil
 		}
-		if err := t.Session.TypeAtFrame(ctx, args.FrameID, *args.X, *args.Y, args.Text); err != nil {
+		submit := args.Key == "enter"
+		if err := t.Session.TypeAtFrame(ctx, args.FrameID, *args.X, *args.Y, args.Text, submit); err != nil {
 			return computerControlError(t.Session, err), nil
 		}
-		return result(map[string]any{"typed": true, "delivery": "foreground", "restored": true})
+		return result(map[string]any{"typed": true, "submitted": submit, "delivery": "foreground", "restored": true})
 	case "click", "click_at", "fill", "replace", "type_text", "press", "scroll", "close_window":
 		if t.Mode != nil && t.Mode.Mode() == permissions.ReadOnly {
 			return errorResult("computer: read-only mode does not permit desktop control"), nil
