@@ -13,6 +13,7 @@
 #include <math.h>
 #include <stdatomic.h>
 #include <unistd.h>
+#include <dlfcn.h>
 
 // Keep system authorization surfaces, Golder, and terminal hosts out of both
 // application launch and window selection.
@@ -255,6 +256,60 @@ void cu_stream_stop_all(void) {
 	[cu_streams removeAllObjects];
 	[cu_streams_lock unlock];
 	for (GolderWindowStream *stream in all) [stream stop];
+}
+
+// Private SkyLight capture of one window's backing store. Unlike ScreenCaptureKit
+// and `screencapture -l`, it returns content for a window on another Space
+// without switching Spaces or ordering windows (the route Cua uses).
+typedef CFArrayRef (*cu_hw_capture_fn)(int, uint32_t *, int, uint32_t);
+typedef int (*cu_connection_fn)(void);
+int cu_capture_window_skylight(uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h) {
+	*out = NULL;
+	*length = 0;
+	void *handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
+	if (!handle) return 0;
+	cu_hw_capture_fn capture = (cu_hw_capture_fn)dlsym(handle, "SLSHWCaptureWindowList");
+	if (!capture) capture = (cu_hw_capture_fn)dlsym(handle, "CGSHWCaptureWindowList");
+	cu_connection_fn connection = (cu_connection_fn)dlsym(handle, "CGSMainConnectionID");
+	if (!capture || !connection) return 0;
+	uint32_t window = windowID;
+	CFArrayRef array = capture(connection(), &window, 1, (1u << 11) | (1u << 8));
+	if (!array) return 0;
+	CGImageRef image = NULL;
+	if (CFArrayGetCount(array) > 0) {
+		CFTypeRef first = CFArrayGetValueAtIndex(array, 0);
+		if (first && CFGetTypeID(first) == CGImageGetTypeID()) image = (CGImageRef)CFRetain(first);
+	}
+	CFRelease(array);
+	if (!image) return 0;
+	NSMutableData *png = [NSMutableData data];
+	CGImageDestinationRef destination = CGImageDestinationCreateWithData((CFMutableDataRef)png, CFSTR("public.png"), 1, NULL);
+	if (!destination) { CGImageRelease(image); return 0; }
+	CGImageDestinationAddImage(destination, image, NULL);
+	BOOL ok = CGImageDestinationFinalize(destination);
+	CFRelease(destination);
+	CGImageRelease(image);
+	if (!ok || png.length == 0 || png.length > 8*1024*1024) return 0;
+	void *copy = malloc(png.length);
+	if (!copy) return 0;
+	memcpy(copy, png.bytes, png.length);
+	*out = copy;
+	*length = png.length;
+	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, windowID);
+	CGRect bounds = CGRectZero;
+	if (list) {
+		for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
+			CFDictionaryRef d = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
+			CFDictionaryRef b = (CFDictionaryRef)CFDictionaryGetValue(d, kCGWindowBounds);
+			if (b) { CGRectMakeWithDictionaryRepresentation(b, &bounds); break; }
+		}
+		CFRelease(list);
+	}
+	*x = bounds.origin.x;
+	*y = bounds.origin.y;
+	*w = bounds.size.width;
+	*h = bounds.size.height;
+	return 1;
 }
 
 @implementation GolderCaptureResult

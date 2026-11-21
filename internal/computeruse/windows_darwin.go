@@ -25,6 +25,7 @@ package computeruse
 int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h, void *cancel);
 int cu_stream_latest(int32_t pid, uint32_t windowID, double timeout, void **out, size_t *length, double *at, int *status, double *x, double *y, double *w, double *h, void *cancel);
 void cu_stream_stop_all(void);
+int cu_capture_window_skylight(uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h);
 int cu_window_is_on_screen(uint32_t windowID, int32_t pid);
 int cu_app_allowed(int32_t pid);
 int cu_running_bundle(int32_t pid, char *out, size_t length);
@@ -2342,9 +2343,17 @@ func (c *MacWindowCatalog) CaptureBound(ctx context.Context, target Target) ([]b
 	}
 	done := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
-	var at C.double
-	var frameStatus C.int
-	captured := C.cu_stream_latest(C.int32_t(window.pid), window.window_id, 1.5, &data, &length, &at, &frameStatus, &x, &y, &w, &h, unsafe.Pointer(flag))
+	var captured C.int
+	if C.cu_window_is_on_screen(window.window_id, window.pid) == 0 {
+		// ScreenCaptureKit and one-shot captures return the last composited
+		// image off the current Space. Read the backing store directly.
+		captured = C.cu_capture_window_skylight(window.window_id, &data, &length, &x, &y, &w, &h)
+	}
+	if captured == 0 {
+		var at C.double
+		var frameStatus C.int
+		captured = C.cu_stream_latest(C.int32_t(window.pid), window.window_id, 1.5, &data, &length, &at, &frameStatus, &x, &y, &w, &h, unsafe.Pointer(flag))
+	}
 	if captured == 0 {
 		captured = C.cu_capture_window(C.uint32_t(window.pid), window.window_id, &data, &length, &x, &y, &w, &h, unsafe.Pointer(flag))
 	}
