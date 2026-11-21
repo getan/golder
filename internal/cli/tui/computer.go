@@ -497,7 +497,7 @@ func (m Model) computerStarted(msg computerStartedMsg) (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, nil
 	}
-	tool := &agenttool.ComputerTool{Session: msg.session, Mode: m.session.perms}
+	tool := &agenttool.ComputerTool{Session: msg.session, Mode: m.session.perms, Stop: handle.Close}
 	if err := m.session.reg.Register(tool); err != nil {
 		handle.Close()
 		m.session.cancelComputerSetup()

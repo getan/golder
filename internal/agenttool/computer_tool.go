@@ -18,6 +18,10 @@ import (
 type ComputerTool struct {
 	Session *computeruse.Session
 	Mode    *permissions.State
+	// Stop ends the session and closes its operator pane. The frontend that
+	// owns the pane sets it; closing the pane always revokes desktop access
+	// first, so the agent cannot hide supervision and keep controlling.
+	Stop func()
 }
 
 func (*ComputerTool) Name() string { return "computer" }
@@ -181,7 +185,11 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 		t.Session.Pause()
 		return result(map[string]any{"paused": t.Session.Status().Paused})
 	case "stop":
-		t.Session.Stop()
+		if t.Stop != nil {
+			t.Stop()
+		} else {
+			t.Session.Stop()
+		}
 		return result(map[string]any{"stopped": true})
 	case "snapshot":
 		if agentcore.SandboxRequestedFromContext(ctx) || seatbelt.ModeFromEnv() == seatbelt.ModeEnforce {
