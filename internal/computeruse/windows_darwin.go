@@ -570,8 +570,15 @@ static int cu_selected_focus(cu_window selected, AXUIElementRef expected, cu_can
 
 static int cu_raise_pinned(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag) {
 	AXUIElementRef window = cu_ax_window(selected, 0, flag);
-	int raised = window && expected && CFEqual(window, expected) && !cu_cancelled(flag) &&
-		AXUIElementPerformAction(window, kAXRaiseAction) == kAXErrorSuccess;
+	if (!window || !expected || !CFEqual(window, expected) || cu_cancelled(flag)) { if (window) CFRelease(window); return 0; }
+	// AXRaise does not restore a minimized window; clear that state first.
+	CFTypeRef minimized = NULL;
+	if (AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute, &minimized) == kAXErrorSuccess && minimized &&
+		CFGetTypeID(minimized) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)minimized)) {
+		AXUIElementSetAttributeValue(window, kAXMinimizedAttribute, kCFBooleanFalse);
+	}
+	if (minimized) CFRelease(minimized);
+	int raised = AXUIElementPerformAction(window, kAXRaiseAction) == kAXErrorSuccess;
 	if (window) CFRelease(window);
 	return raised;
 }
@@ -2241,14 +2248,27 @@ func (c *MacWindowCatalog) restoreSelected(ctx context.Context, target Target, a
 			})
 			if err != nil {
 				if errors.Is(err, errRaiseNotVisible) {
-					err = macActivationError(int(reason))
+					// A person requested automatic foregrounding. With no other
+					// real window to choose between, one app activation may move
+					// the exact retained window from another Space.
+					if C.cu_selected_focus(window, c.pinned[target.ID], flag) == 0 && C.cu_focus_selected(window, c.pinned[target.ID], flag, 1) != 0 {
+						raised = 1
+						err = nil
+					} else {
+						err = macActivationError(int(reason))
+					}
 				}
-				if !stop() {
-					<-done
+				if err != nil {
+					// Clean up exactly once. A successful fallback must reach
+					// the shared cleanup below; cleaning up here and falling
+					// through would double-stop and wait forever.
+					if !stop() {
+						<-done
+					}
+					C.free(unsafe.Pointer(flag))
+					c.mu.Unlock()
+					return err
 				}
-				C.free(unsafe.Pointer(flag))
-				c.mu.Unlock()
-				return err
 			}
 		}
 	} else {
