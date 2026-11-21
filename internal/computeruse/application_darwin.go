@@ -9,6 +9,8 @@ int cu_launch_background(const char *path, const char *const *args, int count);
 int cu_frontmost_pid(void);
 int cu_activate_pid(int32_t pid);
 int cu_frontmost_bundle_is(const char *bundleID);
+uint64_t cu_active_space(void);
+int cu_restore_space(uint64_t space);
 */
 import "C"
 
@@ -232,6 +234,7 @@ func (c *MacWindowCatalog) openApplication(ctx context.Context, app Application,
 		return nil
 	}
 	previous := C.cu_frontmost_pid()
+	space := C.cu_active_space()
 	application := C.CString(candidate.path)
 	defer C.free(unsafe.Pointer(application))
 	flags := macApplicationBackgroundArguments(candidate.path)
@@ -248,6 +251,9 @@ func (c *MacWindowCatalog) openApplication(ctx context.Context, app Application,
 		if err := exec.CommandContext(ctx, "open", macApplicationLaunchArgs(candidate.path)...).Run(); err != nil {
 			return fmt.Errorf("launch %s: %w", app.Name, err)
 		}
+		if space != 0 && C.cu_active_space() != space {
+			C.cu_restore_space(space)
+		}
 		return nil
 	}
 	// Some Electron apps activate themselves during startup. Restore the app
@@ -259,6 +265,9 @@ func (c *MacWindowCatalog) openApplication(ctx context.Context, app Application,
 		if C.cu_frontmost_bundle_is(bundle) != 0 {
 			C.cu_activate_pid(previous)
 		}
+	}
+	if space != 0 && C.cu_active_space() != space {
+		C.cu_restore_space(space)
 	}
 	return nil
 }

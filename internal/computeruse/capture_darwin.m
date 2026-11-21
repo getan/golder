@@ -342,6 +342,36 @@ int cu_launch_background(const char *path, const char *const *args, int count) {
 	}
 }
 
+typedef uint64_t (*cu_get_space_fn)(int);
+typedef void (*cu_set_display_space_fn)(int, CFStringRef, uint64_t);
+
+static void *cu_skylight_handle(void) {
+	return dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
+}
+
+uint64_t cu_active_space(void) {
+	int (*connection)(void) = (int (*)(void))dlsym(cu_skylight_handle(), "CGSMainConnectionID");
+	cu_get_space_fn current = (cu_get_space_fn)dlsym(cu_skylight_handle(), "CGSGetActiveSpace");
+	if (!connection || !current) return 0;
+	return current(connection());
+}
+
+int cu_restore_space(uint64_t space) {
+	int (*connection)(void) = (int (*)(void))dlsym(cu_skylight_handle(), "CGSMainConnectionID");
+	cu_set_display_space_fn set = (cu_set_display_space_fn)dlsym(cu_skylight_handle(), "CGSManagedDisplaySetCurrentSpace");
+	if (!set) set = (cu_set_display_space_fn)dlsym(cu_skylight_handle(), "SLSManagedDisplaySetCurrentSpace");
+	if (!connection || !set || space == 0) return 0;
+	CGDirectDisplayID display = CGMainDisplayID();
+	CFUUIDRef uuid = CGDisplayCreateUUIDFromDisplayID(display);
+	if (!uuid) return 0;
+	CFStringRef identifier = CFUUIDCreateString(NULL, uuid);
+	CFRelease(uuid);
+	if (!identifier) return 0;
+	set(connection(), identifier, space);
+	CFRelease(identifier);
+	return 1;
+}
+
 int cu_frontmost_pid(void) {
 	@autoreleasepool {
 		NSRunningApplication *app = [[NSWorkspace sharedWorkspace] frontmostApplication];
