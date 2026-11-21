@@ -2650,6 +2650,9 @@ func (c *MacWindowCatalog) TypeAtFrame(ctx context.Context, target Target, token
 	}
 	previous := C.cu_frontmost_pid()
 	space := C.cu_active_space()
+	if c.homeSpace != 0 {
+		space = c.homeSpace
+	}
 	if previous <= 0 || previous == C.int32_t(window.pid) {
 		previous = c.homePID
 	}
