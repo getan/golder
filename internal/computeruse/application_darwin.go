@@ -260,27 +260,31 @@ func (c *MacWindowCatalog) openApplication(ctx context.Context, app Application,
 	// active Space with them. Space changes are asynchronous, so re-assert the
 	// previous Space and frontmost app until the launch settles.
 	if previous > 0 || space != 0 {
-		bundle := C.CString(candidate.bundleID)
-		defer C.free(unsafe.Pointer(bundle))
-		stable := 0
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) {
-			time.Sleep(150 * time.Millisecond)
-			if previous > 0 && C.cu_frontmost_bundle_is(bundle) != 0 {
-				C.cu_activate_pid(previous)
-			}
-			if space != 0 && C.cu_active_space() != space {
-				C.cu_restore_space(space)
-			}
-			if (space == 0 || C.cu_active_space() == space) && (previous == 0 || C.cu_frontmost_bundle_is(bundle) == 0) {
-				stable++
-				if stable >= 2 {
-					break
+		bundleID := candidate.bundleID
+		go func(previous C.int32_t, space C.uint64_t, bundleID string) {
+			bundle := C.CString(bundleID)
+			defer C.free(unsafe.Pointer(bundle))
+			start := time.Now()
+			stable := 0
+			deadline := start.Add(6 * time.Second)
+			for time.Now().Before(deadline) {
+				time.Sleep(200 * time.Millisecond)
+				if previous > 0 && C.cu_frontmost_bundle_is(bundle) != 0 {
+					C.cu_activate_pid(previous)
 				}
-			} else {
-				stable = 0
+				if space != 0 && C.cu_active_space() != space {
+					C.cu_restore_space(space)
+				}
+				if (space == 0 || C.cu_active_space() == space) && (previous == 0 || C.cu_frontmost_bundle_is(bundle) == 0) {
+					stable++
+					if stable >= 3 && time.Since(start) >= 2*time.Second {
+						break
+					}
+				} else {
+					stable = 0
+				}
 			}
-		}
+		}(previous, space, bundleID)
 	}
 	return nil
 }
