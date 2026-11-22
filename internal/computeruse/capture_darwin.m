@@ -374,6 +374,36 @@ int cu_restore_space(uint64_t space) {
 	return 1;
 }
 
+// Make the Space that owns `windowID` visible so a real HID click can land on
+// it. The caller restores the operator's home Space afterwards.
+int cu_switch_to_window_space(uint32_t windowID) {
+	void *handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
+	if (!handle) return 0;
+	int (*connection)(void) = (int (*)(void))dlsym(handle, "CGSMainConnectionID");
+	CFArrayRef (*copy_spaces)(uint32_t, int, CFArrayRef) = (CFArrayRef (*)(uint32_t, int, CFArrayRef))dlsym(handle, "SLSCopySpacesForWindows");
+	CFStringRef (*display_for_window)(uint32_t, uint32_t) = (CFStringRef (*)(uint32_t, uint32_t))dlsym(handle, "SLSCopyManagedDisplayForWindow");
+	cu_set_display_space_fn set_space = (cu_set_display_space_fn)dlsym(handle, "CGSManagedDisplaySetCurrentSpace");
+	if (!set_space) set_space = (cu_set_display_space_fn)dlsym(handle, "SLSManagedDisplaySetCurrentSpace");
+	if (!connection || !copy_spaces || !display_for_window || !set_space) return 0;
+	uint32_t wid = windowID;
+	CFNumberRef number = CFNumberCreate(NULL, kCFNumberSInt32Type, &wid);
+	if (!number) return 0;
+	CFArrayRef windows = CFArrayCreate(NULL, (const void **)&number, 1, &kCFTypeArrayCallBacks);
+	CFRelease(number);
+	if (!windows) return 0;
+	CFArrayRef spaces = copy_spaces(connection(), 0x7, windows);
+	CFRelease(windows);
+	if (!spaces || CFArrayGetCount(spaces) == 0) { if (spaces) CFRelease(spaces); return 0; }
+	uint64_t space = 0;
+	CFNumberGetValue((CFNumberRef)CFArrayGetValueAtIndex(spaces, 0), kCFNumberSInt64Type, &space);
+	CFRelease(spaces);
+	CFStringRef display = display_for_window(connection(), windowID);
+	if (!display) return 0;
+	set_space(connection(), display, space);
+	CFRelease(display);
+	return 1;
+}
+
 int cu_frontmost_pid(void) {
 	@autoreleasepool {
 		NSRunningApplication *app = [[NSWorkspace sharedWorkspace] frontmostApplication];

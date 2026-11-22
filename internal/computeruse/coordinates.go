@@ -2,6 +2,7 @@ package computeruse
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"time"
 	"unicode"
@@ -193,13 +194,23 @@ type PointHIDClickBackend interface {
 }
 
 func (s *Session) ClickHIDFrame(ctx context.Context, frameID string, x, y float64) error {
-	return s.useFrame(ctx, frameID, x, y, true, func(ctx context.Context, backend FrameBoundBackend, target Target, lease frameLease) error {
+	status := s.Status()
+	if status.PendingPreview {
+		return fmt.Errorf("click_hid_at: pending preview: %w", ErrNotAllowed)
+	}
+	if !status.Capabilities.Control {
+		return fmt.Errorf("click_hid_at: control capability disabled: %w", ErrNotAllowed)
+	}
+	if err := s.useFrame(ctx, frameID, x, y, true, func(ctx context.Context, backend FrameBoundBackend, target Target, lease frameLease) error {
 		point, ok := backend.(PointHIDClickBackend)
 		if !ok {
 			return noInputError(ErrUnavailable)
 		}
-		return point.ClickHIDFrame(ctx, target, lease.token, x, y)
-	})
+		return point.ClickHIDFrame(ctx, target, lease.token, x/float64(lease.width), y/float64(lease.height))
+	}); err != nil {
+		return fmt.Errorf("click_hid_at: %w", err)
+	}
+	return nil
 }
 
 // TypeAtFrame is the pixel-targeted text path. The frame lease binds the
@@ -237,7 +248,7 @@ func (s *Session) ScrollFrame(ctx context.Context, frameID string, x, y float64,
 
 func (s *Session) useFrame(ctx context.Context, frameID string, x, y float64, point bool, operation func(context.Context, FrameBoundBackend, Target, frameLease) error) error {
 	if math.IsNaN(x) || math.IsInf(x, 0) || math.IsNaN(y) || math.IsInf(y, 0) {
-		return ErrNotAllowed
+		return fmt.Errorf("useFrame: invalid coordinates: %w", ErrNotAllowed)
 	}
 	return s.Do(ctx, true, func(ctx context.Context, backend Backend, target Target) error {
 		bound, ok := backend.(FrameBoundBackend)

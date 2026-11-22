@@ -31,6 +31,7 @@ int cu_frontmost_pid(void);
 int cu_host_app_pid(void);
 uint64_t cu_active_space(void);
 int cu_restore_space(uint64_t space);
+int cu_switch_to_window_space(uint32_t windowID);
 int cu_window_is_on_screen(uint32_t windowID, int32_t pid);
 int cu_app_allowed(int32_t pid);
 int cu_running_bundle(int32_t pid, char *out, size_t length);
@@ -2816,8 +2817,8 @@ func (c *MacWindowCatalog) ClickHIDFrame(ctx context.Context, target Target, tok
 	if json.Unmarshal([]byte(token), &binding) != nil || binding.Target != target.ID || binding.W <= 0 || binding.H <= 0 {
 		return noInputError(ErrStaleObservation)
 	}
-	if x < 0 || y < 0 || x >= float64(binding.W) || y >= float64(binding.H) {
-		return noInputError(ErrNotAllowed)
+	if x < 0 || y < 0 || x > 1 || y > 1 {
+		return noInputError(staleReason("click_hid_at_bounds", "point lies outside the captured frame"))
 	}
 	c.mu.Lock()
 	window, ok := c.windows[target.ID]
@@ -2834,14 +2835,25 @@ func (c *MacWindowCatalog) ClickHIDFrame(ctx context.Context, target Target, tok
 	if previous <= 0 || previous == C.int32_t(window.pid) {
 		previous = c.homePID
 	}
-	C.cu_activate_pid(C.int32_t(window.pid))
-	time.Sleep(350 * time.Millisecond)
-	nx, ny := x/float64(binding.W), y/float64(binding.H)
+	C.cu_switch_to_window_space(window.window_id)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if C.cu_window_is_on_screen(window.window_id, window.pid) != 0 && C.cu_frontmost_pid() == C.int32_t(window.pid) {
+			break
+		}
+		C.cu_activate_pid(C.int32_t(window.pid))
+		time.Sleep(100 * time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond)
+	nx, ny := x, y
 	err := c.sendFrame(ctx, target, binding, func(w C.cu_window, pinned C.AXUIElementRef, b macFrameBinding, flag *C.cu_cancel_flag) C.int {
 		return C.cu_hid_click_frame(w, pinned, C.double(b.X), C.double(b.Y), C.double(b.W), C.double(b.H), C.double(nx), C.double(ny), flag)
 	})
 	c.restoreAfterForeground(previous, space)
-	return err
+	if err != nil {
+		return fmt.Errorf("click_hid_at: mac: %w", err)
+	}
+	return nil
 }
 
 func (c *MacWindowCatalog) restoreAfterForeground(previous C.int32_t, space C.uint64_t) {
