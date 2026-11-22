@@ -303,7 +303,15 @@ func (b *linuxATSPIBackend) Targets(ctx context.Context) ([]Target, error) {
 				}
 				id := hex.EncodeToString(nonce[:])
 				next[id] = atspiWindow{object: window, pid: pid, start: start, executable: exe, application: name, title: title}
-				targets = append(targets, Target{ID: id, Application: name, Window: title, Detail: fmt.Sprintf("PID %d · Window %d", pid, j+1)})
+				width, height := atspiWindowSize(window)
+				targets = append(targets, Target{
+					ID:          id,
+					Application: name,
+					Window:      title,
+					Detail:      fmt.Sprintf("PID %d · Window %d", pid, j+1),
+					Width:       width,
+					Height:      height,
+				})
 			}
 		}
 		atspiUnref(app)
@@ -327,7 +335,32 @@ func (b *linuxATSPIBackend) Targets(ctx context.Context) ([]Target, error) {
 	}
 	b.portalTarget, b.portalCandidate, b.portalApproved = "", "", false
 	b.x11Ready = false
-	return targets, nil
+	return orderWorkingWindows(targets), nil
+}
+
+// atspiWindowSize reports the window's on-screen size. Zero means the platform
+// did not report geometry, which is never treated as a small window.
+func atspiWindowSize(window uintptr) (float64, float64) {
+	component := atspiComponent(window)
+	if component == 0 {
+		return 0, 0
+	}
+	defer atspiUnref(component)
+	var failure uintptr
+	ptr := atspiExtents(component, 0, &failure) // screen coordinates
+	if ptr == 0 {
+		return 0, 0
+	}
+	defer atspiFree(ptr)
+	if atspiError(failure) != nil {
+		return 0, 0
+	}
+	base := *(*unsafe.Pointer)(unsafe.Pointer(&ptr))
+	rect := *(*atspiRect)(base)
+	if rect.Width <= 0 || rect.Height <= 0 {
+		return 0, 0
+	}
+	return float64(rect.Width), float64(rect.Height)
 }
 
 func (b *linuxATSPIBackend) validate(ctx context.Context, target Target) (atspiWindow, error) {

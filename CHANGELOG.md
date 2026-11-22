@@ -11,15 +11,21 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
-### Computer Use
-- Show how long ago the preview was captured next to its capture path, pixel
-  grid and last content change, so a frozen capture is distinguishable from an
-  idle window.
-
 ### Windows desktop compatibility
 - Add a native File/Exit menu and guard shutdown while a Windows file picker is
   open. The Windows GUI packaging workflow exercises the menu and picker on a
   real Windows runner; see [v1.5.70 notes](docs/releases/v1.5.70.md).
+
+## [1.5.131] - 2026-11-22
+
+### Computer Use
+- Show how long ago the preview was captured next to its capture path, pixel
+  grid and last content change, so a frozen capture is distinguishable from an
+  idle window.
+- Apply the working-window ordering to Linux AT-SPI and Windows UIA targets, so
+  a launch prefers the real window over an indicator window there too.
+- Label the capture path on Linux (`portal`) and Windows (`wgc` / `printwindow`)
+  the way macOS already reports `stream` / `skylight` / `screenshot`.
 
 ## [1.5.130] - 2026-11-22
 

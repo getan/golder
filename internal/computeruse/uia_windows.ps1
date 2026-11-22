@@ -175,6 +175,7 @@ public static class GolderWindowCheck {
         if ([GolderWindowCheck]::GetWindowDisplayAffinity($hwnd, [ref]$affinity) -and $affinity -ne 0) { throw 'protected window' }
         $rect = [GolderWindowCheck+Rect]::new()
         $kind = 'extended'
+        $route = 'wgc'
         try {
             if (-not [GolderWindowCheck]::GetRect($hwnd, $true, [ref]$rect)) { throw 'window bounds unavailable' }
             $bounds = [int[]]@($rect.left, $rect.top, $rect.right, $rect.bottom)
@@ -202,12 +203,13 @@ public static class GolderWindowCheck {
             } finally { $stream.Dispose() }
         } catch {
             $kind = 'window'
+            $route = 'printwindow'
             if (-not [GolderWindowCheck]::GetRect($hwnd, $false, [ref]$rect)) { throw 'target lost' }
             $bounds = [int[]]@($rect.left, $rect.top, $rect.right, $rect.bottom)
             $png = [GolderWindowCheck]::Capture($hwnd)
         }
         if (-not (Test-Target) -or -not [GolderWindowCheck]::SameRect($hwnd, $bounds, ($kind -eq 'extended'))) { throw 'target lost' }
-        [Console]::Out.Write((@{ png=[Convert]::ToBase64String($png); rect=$bounds; geometry=$kind } | ConvertTo-Json -Compress))
+        [Console]::Out.Write((@{ png=[Convert]::ToBase64String($png); rect=$bounds; geometry=$kind; route=$route } | ConvertTo-Json -Compress))
         exit 0
     }
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)

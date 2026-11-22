@@ -32,6 +32,7 @@ var windowsUIAScript embed.FS
 
 var windowsUser32 = windows.NewLazySystemDLL("user32.dll")
 var windowsGetTopWindow = windowsUser32.NewProc("GetTopWindow")
+var windowsGetWindowRect = windowsUser32.NewProc("GetWindowRect")
 var windowsGetWindow = windowsUser32.NewProc("GetWindow")
 var windowsGetWindowText = windowsUser32.NewProc("GetWindowTextW")
 var windowsGetClassName = windowsUser32.NewProc("GetClassNameW")
@@ -45,6 +46,8 @@ type windowsTarget struct {
 	class       string
 	application string
 	title       string
+	width       float64
+	height      float64
 }
 
 type windowsBackend struct {
@@ -174,7 +177,14 @@ func inspectWindowsTarget(hwnd uintptr) (windowsTarget, error) {
 	if title == "" || class == "" {
 		return windowsTarget{}, ErrTargetLost
 	}
-	return windowsTarget{hwnd: hwnd, pid: pid, start: start, executable: exe, class: class, application: strings.TrimSuffix(filepath.Base(exe), filepath.Ext(exe)), title: title}, nil
+	var rect struct{ Left, Top, Right, Bottom int32 }
+	var width, height float64
+	if ok, _, _ := windowsGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&rect))); ok != 0 {
+		if rect.Right > rect.Left && rect.Bottom > rect.Top {
+			width, height = float64(rect.Right-rect.Left), float64(rect.Bottom-rect.Top)
+		}
+	}
+	return windowsTarget{hwnd: hwnd, pid: pid, start: start, executable: exe, class: class, application: strings.TrimSuffix(filepath.Base(exe), filepath.Ext(exe)), title: title, width: width, height: height}, nil
 }
 
 func (b *windowsBackend) Targets(ctx context.Context) ([]Target, error) {
@@ -202,12 +212,19 @@ func (b *windowsBackend) Targets(ctx context.Context) ([]Target, error) {
 			}
 			id := hex.EncodeToString(nonce[:])
 			next[id] = window
-			targets = append(targets, Target{ID: id, Application: window.application, Window: window.title, Detail: fmt.Sprintf("PID %d · Window %x", window.pid, hwnd)})
+			targets = append(targets, Target{
+				ID:          id,
+				Application: window.application,
+				Window:      window.title,
+				Detail:      fmt.Sprintf("PID %d · Window %x", window.pid, hwnd),
+				Width:       window.width,
+				Height:      window.height,
+			})
 		}
 		hwnd, _, _ = windowsGetWindow.Call(hwnd, 2) // GW_HWNDNEXT
 	}
 	b.targets, b.refs, b.snapshotID, b.targetID, b.rootID = next, nil, "", "", ""
-	return targets, nil
+	return orderWorkingWindows(targets), nil
 }
 
 func (b *windowsBackend) validate(ctx context.Context, target Target) (windowsTarget, error) {
@@ -275,6 +292,7 @@ type windowsUIAResult struct {
 	Root      string           `json:"root"`
 	Geometry  string           `json:"geometry"`
 	Rect      [4]int32         `json:"rect"`
+	Route     string           `json:"route"`
 }
 
 type boundedWindowsOutput struct {
@@ -416,6 +434,7 @@ type windowsFrameBinding struct {
 	Geometry string
 	Rect     [4]int32
 	Digest   [32]byte
+	Source   string `json:"s,omitempty"`
 }
 
 // CaptureBound never falls back to capturing a desktop or screen rectangle.
@@ -440,11 +459,28 @@ func (b *windowsBackend) CaptureBound(ctx context.Context, target Target) ([]byt
 	if err != nil || format != "png" || int64(config.Width) != int64(result.Rect[2])-int64(result.Rect[0]) || int64(config.Height) != int64(result.Rect[3])-int64(result.Rect[1]) || int64(config.Width)*int64(config.Height) > MaxFramePixels {
 		return nil, "", errors.New("Windows window capture geometry is invalid")
 	}
-	binding, err := json.Marshal(windowsFrameBinding{Target: target.ID, Geometry: result.Geometry, Rect: result.Rect, Digest: sha256.Sum256(result.PNG)})
+	source := result.Route
+	if source == "" {
+		source = "uia"
+	}
+	binding, err := json.Marshal(windowsFrameBinding{Target: target.ID, Geometry: result.Geometry, Rect: result.Rect, Digest: sha256.Sum256(result.PNG), Source: source})
 	if err != nil {
 		return nil, "", err
 	}
 	return result.PNG, string(binding), nil
+}
+
+// CaptureSource labels a Windows frame: the capture route the helper reported.
+// Diagnostic only.
+func (b *windowsBackend) CaptureSource(token string) string {
+	if len(token) == 0 || len(token) > maxFrameTokenBytes {
+		return ""
+	}
+	var binding windowsFrameBinding
+	if json.Unmarshal([]byte(token), &binding) != nil {
+		return ""
+	}
+	return binding.Source
 }
 
 func (b *windowsBackend) dispatchFrame(ctx context.Context, target Target, token string, request windowsUIARequest) error {

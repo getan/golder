@@ -60,7 +60,12 @@ type linuxFrameBinding struct {
 	Digest [32]byte
 	HasX11 bool
 	X11    x11FrameIdentity
+	Source string `json:"s,omitempty"`
 }
+
+// linuxCaptureSource names the only Linux frame path: a portal stream the
+// person matched to this target.
+const linuxCaptureSource = "portal"
 
 type atspiRect struct {
 	X, Y, Width, Height int32
@@ -75,7 +80,7 @@ func (b *linuxATSPIBackend) CaptureBound(ctx context.Context, target Target) ([]
 	if err != nil || format != "png" || config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > MaxFramePixels {
 		return nil, "", errors.New("Linux window frame is invalid")
 	}
-	binding := linuxFrameBinding{Target: target.ID, Width: config.Width, Height: config.Height, Digest: sha256.Sum256(data)}
+	binding := linuxFrameBinding{Target: target.ID, Width: config.Width, Height: config.Height, Digest: sha256.Sum256(data), Source: linuxCaptureSource}
 	if x11Session() {
 		if identity, err := b.captureX11Identity(ctx, target, config.Width, config.Height); err == nil {
 			binding.HasX11, binding.X11 = true, identity
@@ -96,6 +101,18 @@ func (b *linuxATSPIBackend) CaptureBound(ctx context.Context, target Target) ([]
 		return nil, "", err
 	}
 	return data, string(token), nil
+}
+
+// CaptureSource labels a portal frame. Diagnostic only.
+func (b *linuxATSPIBackend) CaptureSource(token string) string {
+	if len(token) == 0 || len(token) > maxFrameTokenBytes {
+		return ""
+	}
+	var binding linuxFrameBinding
+	if json.Unmarshal([]byte(token), &binding) != nil {
+		return ""
+	}
+	return binding.Source
 }
 
 func atspiTargetContains(ctx context.Context, window atspiWindow, wanted uintptr) bool {
