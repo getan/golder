@@ -32,6 +32,9 @@ type Target struct {
 	ApplicationID string // platform identity, never a model-supplied selector
 	Window        string
 	Detail        string // operator-facing disambiguation; never a model selector
+	// Width/Height are the window's geometry in points when the platform
+	// reports it. Zero means unknown, never "empty window".
+	Width, Height float64
 }
 
 type Capabilities struct {

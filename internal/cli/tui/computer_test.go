@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,19 +13,40 @@ import (
 
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/computersetup"
 	"github.com/getan/golder/internal/computeruse"
 	"github.com/getan/golder/internal/permissions"
 )
 
-type computerPickerBackend struct{ closed chan struct{} }
+type computerPickerBackend struct {
+	closed  chan struct{}
+	targets []computeruse.Target
+	apps    []computeruse.Application
+	once    sync.Once
+}
 
-func (*computerPickerBackend) Targets(context.Context) ([]computeruse.Target, error) { return nil, nil }
+func (b *computerPickerBackend) Targets(context.Context) ([]computeruse.Target, error) {
+	return b.targets, nil
+}
+
+func (b *computerPickerBackend) Applications(context.Context, string) ([]computeruse.Application, error) {
+	return b.apps, nil
+}
+
+func (*computerPickerBackend) LaunchApplication(context.Context, computeruse.Application) error {
+	return nil
+}
+
 func (*computerPickerBackend) Validate(context.Context, computeruse.Target, bool) error {
 	return nil
 }
 func (b *computerPickerBackend) Close() error {
-	close(b.closed)
+	b.once.Do(func() { close(b.closed) })
 	return nil
+}
+
+func backendFactory(backend computeruse.PlatformBackend) func() (computeruse.PlatformBackend, error) {
+	return func() (computeruse.PlatformBackend, error) { return backend, nil }
 }
 
 func TestComputerStatusDoesNotStartOrRequireDesktopSession(t *testing.T) {
@@ -40,7 +62,7 @@ func TestComputerStatusDoesNotStartOrRequireDesktopSession(t *testing.T) {
 
 func TestComputerSetupFailureReportsReasonAndPermissions(t *testing.T) {
 	s := newRemoteTestSession(t)
-	setup := newComputerSetup(s.header.ID)
+	setup := newComputerSetup(s.header.ID, "", false, nil)
 	s.computerSetup = setup
 	m := NewModel(Options{})
 	m.session = s
@@ -61,15 +83,15 @@ func TestComputerSetupFailureReportsReasonAndPermissions(t *testing.T) {
 func TestComputerPickerRequiresSeparateReadOnlyGrantAndCancels(t *testing.T) {
 	s := newRemoteTestSession(t)
 	s.perms = permissions.New(permissions.ReadOnly)
-	setup := newComputerSetup(s.header.ID)
-	backend := &computerPickerBackend{closed: make(chan struct{})}
-	if !setup.installBackend(backend) {
-		t.Fatal("backend was not installed")
+	backend := &computerPickerBackend{closed: make(chan struct{}), targets: []computeruse.Target{{ID: "opaque", Application: "Calculator", Window: "Calculator"}}}
+	setup := newComputerSetupWith(computersetup.Options{SessionID: s.header.ID, ReadOnly: true, Backend: backendFactory(backend)})
+	if err := setup.Resolve(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	s.computerSetup = setup
 	m := NewModel(Options{})
 	m.session = s
-	got, _ := m.computerTargetsReady(computerTargetsMsg{setup: setup, targets: []computeruse.Target{{ID: "opaque", Application: "Calculator", Window: "Calculator"}}})
+	got, _ := m.computerTargetsReady(computerTargetsMsg{setup: setup})
 	m = got.(Model)
 	if m.menu.pickKind != "computer-target" || len(m.menu.pick) != 1 {
 		t.Fatalf("target picker not shown: %+v", m.menu)
@@ -165,14 +187,15 @@ func TestSuggestedComputerTargetStartsUniqueAndHandlesAmbiguity(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newRemoteTestSession(t)
-			setup := newComputerSetup(s.header.ID)
-			setup.suggested = "Calculator"
-			backend := &computerPickerBackend{closed: make(chan struct{})}
-			setup.installBackend(backend)
+			backend := &computerPickerBackend{closed: make(chan struct{}), targets: tc.targets}
+			setup := newComputerSetupWith(computersetup.Options{SessionID: s.header.ID, Suggested: "Calculator", Backend: backendFactory(backend)})
+			if err := setup.Resolve(context.Background()); err != nil {
+				t.Fatal(err)
+			}
 			s.computerSetup = setup
 			m := NewModel(Options{})
 			m.session = s
-			got, cmd := m.computerTargetsReady(computerTargetsMsg{setup: setup, targets: tc.targets})
+			got, cmd := m.computerTargetsReady(computerTargetsMsg{setup: setup})
 			m = got.(Model)
 			if (cmd != nil) != tc.wantCmd || m.menu.pickKind != tc.wantKind || len(m.menu.pick) != tc.wantRows || s.computerTool != nil {
 				t.Fatalf("kind=%q rows=%d tool=%v cmd=%v", m.menu.pickKind, len(m.menu.pick), s.computerTool, cmd)
@@ -187,15 +210,16 @@ func TestSuggestedComputerTargetStartsUniqueAndHandlesAmbiguity(t *testing.T) {
 
 func TestComputerApplicationAmbiguityRequiresChoice(t *testing.T) {
 	s := newRemoteTestSession(t)
-	setup := newComputerSetup(s.header.ID)
-	setup.suggested = "Calculator"
-	backend := &computerPickerBackend{closed: make(chan struct{})}
-	setup.installBackend(backend)
+	apps := []computeruse.Application{{ID: "one", Name: "Calculator", Detail: "/one"}, {ID: "two", Name: "Calculator", Detail: "/two"}}
+	backend := &computerPickerBackend{closed: make(chan struct{}), apps: apps}
+	setup := newComputerSetupWith(computersetup.Options{SessionID: s.header.ID, Suggested: "Calculator", Backend: backendFactory(backend)})
+	if err := setup.Resolve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	s.computerSetup = setup
 	m := NewModel(Options{})
 	m.session = s
-	apps := []computeruse.Application{{ID: "one", Name: "Calculator", Detail: "/one"}, {ID: "two", Name: "Calculator", Detail: "/two"}}
-	next, cmd := m.computerTargetsReady(computerTargetsMsg{setup: setup, applications: apps})
+	next, cmd := m.computerTargetsReady(computerTargetsMsg{setup: setup})
 	m = next.(Model)
 	if cmd != nil || m.menu.pickKind != "computer-application" || len(m.menu.pick) != 2 {
 		t.Fatalf("application ambiguity was not presented: kind=%q rows=%d", m.menu.pickKind, len(m.menu.pick))
@@ -209,9 +233,11 @@ func TestComputerApplicationAmbiguityRequiresChoice(t *testing.T) {
 
 func TestNewTurnCancelsPendingComputerSetupBeforeStarting(t *testing.T) {
 	s := newRemoteTestSession(t)
-	setup := newComputerSetup(s.header.ID)
 	backend := &computerPickerBackend{closed: make(chan struct{})}
-	setup.installBackend(backend)
+	setup := newComputerSetupWith(computersetup.Options{SessionID: s.header.ID, Backend: backendFactory(backend)})
+	if err := setup.Resolve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	s.computerSetup = setup
 	m := NewModel(Options{})
 	m.session = s
@@ -296,7 +322,7 @@ func TestComputerRequestOpensPickerAfterTurnWithoutGrantingAccess(t *testing.T) 
 	}
 	next, cmd := m.Update(runEndMsg{})
 	m = next.(Model)
-	if cmd == nil || s.computerSetup == nil || s.computerSetup.suggested != "Calculator" || s.computerTool != nil {
+	if cmd == nil || s.computerSetup == nil || s.computerSetup.Suggested() != "Calculator" || s.computerTool != nil {
 		t.Fatalf("picker was not scheduled safely: setup=%+v tool=%v", s.computerSetup, s.computerTool)
 	}
 	s.cancelComputerSetup()

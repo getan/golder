@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+const (
+	minWorkingWindowWidth  = 120
+	minWorkingWindowHeight = 80
+)
+
+// helperWindowSettle bounds how long a launch waits for a working window when
+// only indicator windows exist. It is a variable so tests need not sleep.
+var helperWindowSettle = 2 * time.Second
+
 // Application is a locally discovered, opaque launch candidate. Its ID is
 // valid only for the backend that discovered it; Detail is for disambiguation.
 type Application struct {
@@ -215,6 +224,7 @@ func launchAndFindApplication(ctx context.Context, backend PlatformBackend, app 
 	defer ticker.Stop()
 	deadline := time.NewTimer(12 * time.Second)
 	defer deadline.Stop()
+	started := time.Now()
 	var reveal <-chan time.Time
 	revealer, canReveal := backend.(ApplicationRevealer)
 	_, canFindBackground := backend.(ApplicationWindowLookup)
@@ -244,7 +254,14 @@ func launchAndFindApplication(ctx context.Context, backend PlatformBackend, app 
 			}
 		}
 		if len(matches) > 0 {
-			return ApplicationResolution{Targets: matches, Matched: true}, nil
+			// A freshly launched app can publish a small indicator window
+			// before its real one; do not settle for that as "the" window.
+			if working := workingWindows(matches); len(working) > 0 {
+				return ApplicationResolution{Targets: working, Matched: true}, nil
+			}
+			if time.Since(started) >= helperWindowSettle {
+				return ApplicationResolution{Targets: matches, Matched: true}, nil
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -270,4 +287,41 @@ func launchAndFindApplication(ctx context.Context, backend PlatformBackend, app 
 		case <-ticker.C:
 		}
 	}
+}
+
+// helperWindow reports a window too small to be an application's working
+// surface: some apps publish a status or indicator window at layer zero before
+// their main window. Unknown geometry is never treated as a helper window.
+func helperWindow(t Target) bool {
+	if t.Width <= 0 || t.Height <= 0 {
+		return false
+	}
+	return t.Width < minWorkingWindowWidth || t.Height < minWorkingWindowHeight
+}
+
+// workingWindows keeps the targets that can be an application's surface.
+func workingWindows(targets []Target) []Target {
+	out := make([]Target, 0, len(targets))
+	for _, target := range targets {
+		if !helperWindow(target) {
+			out = append(out, target)
+		}
+	}
+	return out
+}
+
+// orderWorkingWindows puts working windows first without disturbing the
+// WindowServer's front-to-back order, so the first match a frontend
+// auto-selects is a real window whenever one exists.
+func orderWorkingWindows(targets []Target) []Target {
+	if len(targets) < 2 {
+		return targets
+	}
+	ordered := workingWindows(targets)
+	for _, target := range targets {
+		if helperWindow(target) {
+			ordered = append(ordered, target)
+		}
+	}
+	return ordered
 }

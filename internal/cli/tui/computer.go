@@ -13,6 +13,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/computersetup"
 	"github.com/getan/golder/internal/computeruse"
 	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/permissions"
@@ -20,40 +21,26 @@ import (
 )
 
 type computerSetup struct {
-	mu           sync.Mutex
-	ctx          context.Context
-	cancel       context.CancelFunc
-	sessionID    string
-	backend      computeruse.PlatformBackend
-	targets      []computeruse.Target // owned by the TUI goroutine
-	applications []computeruse.Application
-	selected     int
-	suggested    string
-	handle       *computeruse.PaneHandle
-	closed       bool
+	*computersetup.Setup // shared resolution and grant decisions
+	mu                   sync.Mutex
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	handle               *computeruse.PaneHandle
+	closed               bool
 }
 
-func newComputerSetup(sessionID string) *computerSetup {
+func newComputerSetup(sessionID, suggested string, readOnly bool, guard func() error) *computerSetup {
+	return newComputerSetupWith(computersetup.Options{SessionID: sessionID, Suggested: suggested, ReadOnly: readOnly, Guard: guard})
+}
+
+// newComputerSetupWith is the seam tests use to inject a fake platform catalog.
+func newComputerSetupWith(opts computersetup.Options) *computerSetup {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &computerSetup{ctx: ctx, cancel: cancel, sessionID: sessionID, selected: -1}
-}
-
-func (s *computerSetup) installBackend(backend computeruse.PlatformBackend) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return false
+	return &computerSetup{
+		Setup:  computersetup.New(opts),
+		ctx:    ctx,
+		cancel: cancel,
 	}
-	s.backend = backend
-	return true
-}
-
-func (s *computerSetup) takeBackend() computeruse.PlatformBackend {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	backend := s.backend
-	s.backend = nil
-	return backend
 }
 
 func (s *computerSetup) installHandle(handle *computeruse.PaneHandle) bool {
@@ -80,25 +67,24 @@ func (s *computerSetup) close() {
 	}
 	s.cancel()
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
 	s.closed = true
-	backend, handle := s.backend, s.handle
-	s.backend, s.handle = nil, nil
+	handle := s.handle
+	s.handle = nil
 	s.mu.Unlock()
 	if handle != nil {
 		handle.Close()
 	}
-	if backend != nil {
-		go backend.Close()
-	}
+	s.Setup.Close()
 }
 
 type computerTargetsMsg struct {
-	setup        *computerSetup
-	targets      []computeruse.Target
-	applications []computeruse.Application
-	matched      bool
-	perms        computeruse.PermissionState
-	err          error
+	setup *computerSetup
+	perms computeruse.PermissionState
+	err   error
 }
 
 type computerStartedMsg struct {
@@ -216,34 +202,25 @@ func (m Model) openComputerPickerFor(suggested string, manual bool) (tea.Model, 
 		return m, nil
 	}
 	m.session.stopComputer()
-	setup := newComputerSetup(m.session.header.ID)
-	setup.suggested = suggested
 	mode := m.session.perms
+	readOnly := mode != nil && mode.Mode() == permissions.ReadOnly
+	setup := newComputerSetup(m.session.header.ID, suggested, readOnly, func() error { return agenttool.CheckComputerLaunch(mode) })
 	m.session.computerSetup = setup
 	m.transcript.addSystem("Finding the requested application and its windows…")
 	m.relayout()
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(setup.ctx, 30*time.Second)
 		defer cancel()
-		ctx = computeruse.WithApplicationLaunchGuard(ctx, func() error { return agenttool.CheckComputerLaunch(mode) })
-		backend, err := computeruse.NewPlatformBackend()
-		if err != nil {
-			return computerTargetsMsg{setup: setup, err: err}
-		}
-		if !setup.installBackend(backend) {
-			_ = backend.Close()
-			return computerTargetsMsg{setup: setup, err: context.Canceled}
-		}
-		resolution, err := computeruse.ResolveApplication(ctx, backend, suggested)
+		err := setup.Resolve(ctx)
 		if err == nil {
 			err = ctx.Err()
 		}
-		return computerTargetsMsg{setup: setup, targets: resolution.Targets, applications: resolution.Applications, matched: resolution.Matched, perms: computeruse.ProbePermissions(), err: err}
+		return computerTargetsMsg{setup: setup, perms: computeruse.ProbePermissions(), err: err}
 	}
 }
 
 func (m Model) computerTargetsReady(msg computerTargetsMsg) (tea.Model, tea.Cmd) {
-	if m.session == nil || m.session.computerSetup != msg.setup || m.session.header.ID != msg.setup.sessionID {
+	if m.session == nil || m.session.computerSetup != msg.setup || m.session.header.ID != msg.setup.SessionID() {
 		msg.setup.close()
 		return m, nil
 	}
@@ -260,10 +237,11 @@ func (m Model) computerTargetsReady(msg computerTargetsMsg) (tea.Model, tea.Cmd)
 		m.relayout()
 		return m, nil
 	}
-	if len(msg.applications) > 0 {
-		msg.setup.applications = msg.applications
-		rows := make([]pickItem, 0, len(msg.applications))
-		for i, app := range msg.applications {
+	view := msg.setup.View()
+	plan := msg.setup.Plan()
+	if len(view.Applications) > 0 {
+		rows := make([]pickItem, 0, len(view.Applications))
+		for i, app := range view.Applications {
 			rows = append(rows, pickItem{Title: extensions.DisplayText(app.Name, 120), Status: extensions.DisplayText(app.Detail, 200), Value: strconv.Itoa(i)})
 		}
 		m.menu.openPickerDetailed(rows, "", "computer-application")
@@ -272,27 +250,19 @@ func (m Model) computerTargetsReady(msg computerTargetsMsg) (tea.Model, tea.Cmd)
 		m.relayout()
 		return m, nil
 	}
-	if len(msg.targets) == 0 {
+	if len(view.Targets) == 0 {
 		m.session.cancelComputerSetup()
 		m.transcript.addSystem(fmt.Sprintf("No matching application or window. Screen Recording: %s; Accessibility: %s.", msg.perms.ScreenCapture, msg.perms.Accessibility))
 		m.transcript.addSystem("If the window is minimized or on another desktop, show it and retry.")
 		m.relayout()
 		return m, nil
 	}
-	msg.setup.targets = msg.targets
-	matches := computeruse.MatchApplications(msg.setup.suggested, msg.targets)
-	if msg.matched {
-		matches = make([]int, len(msg.targets))
-		for i := range msg.targets {
-			matches[i] = i
-		}
+	if plan.Action == computeruse.SetupStartTarget {
+		return m.chooseComputerTarget(strconv.Itoa(plan.TargetIndex))
 	}
-	if msg.setup.suggested != "" && len(matches) == 1 {
-		return m.chooseComputerTarget(strconv.Itoa(matches[0]))
-	}
-	rows := make([]pickItem, 0, len(msg.targets))
-	for i, target := range msg.targets {
-		if msg.setup.suggested != "" && len(matches) > 1 && !slices.Contains(matches, i) {
+	rows := make([]pickItem, 0, len(view.Targets))
+	for i, target := range view.Targets {
+		if view.Suggested != "" && len(plan.Matches) > 1 && !slices.Contains(plan.Matches, i) {
 			continue
 		}
 		label := target.Window
@@ -306,9 +276,9 @@ func (m Model) computerTargetsReady(msg computerTargetsMsg) (tea.Model, tea.Cmd)
 	}
 	m.menu.openPickerDetailed(rows, "", "computer-target")
 	m.menu.pickHint = "↑↓ select window · Enter choose · Esc cancel"
-	if msg.setup.suggested != "" && len(matches) == 0 {
-		m.transcript.addSystem("No exact match for " + extensions.DisplayText(msg.setup.suggested, 128) + "; select a window or cancel.")
-	} else if len(matches) > 1 {
+	if view.Suggested != "" && len(plan.Matches) == 0 {
+		m.transcript.addSystem("No exact match for " + extensions.DisplayText(view.Suggested, 128) + "; select a window or cancel.")
+	} else if len(plan.Matches) > 1 {
 		m.transcript.addSystem("Several windows match the requested application; select the intended window.")
 	}
 	m.transcript.addSystem(fmt.Sprintf("Select one target window. Screen Recording: %s; Accessibility: %s.", msg.perms.ScreenCapture, msg.perms.Accessibility))
@@ -322,27 +292,26 @@ func (m Model) chooseComputerApplication(item string) (tea.Model, tea.Cmd) {
 	}
 	setup := m.session.computerSetup
 	index, err := strconv.Atoi(item)
-	if err != nil || index < 0 || index >= len(setup.applications) {
+	view := setup.View()
+	if err != nil || index < 0 || index >= len(view.Applications) {
 		m.session.cancelComputerSetup()
 		m.menu.close()
 		m.transcript.addSystem("Computer Use: application choice expired.")
 		m.relayout()
 		return m, nil
 	}
-	app := setup.applications[index]
-	mode := m.session.perms
-	setup.mu.Lock()
-	backend := setup.backend
-	setup.mu.Unlock()
+	app := view.Applications[index]
 	m.menu.close()
 	m.transcript.addSystem("Opening " + extensions.DisplayText(app.Name, 120) + "…")
 	m.relayout()
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(setup.ctx, 30*time.Second)
 		defer cancel()
-		ctx = computeruse.WithApplicationLaunchGuard(ctx, func() error { return agenttool.CheckComputerLaunch(mode) })
-		resolution, err := computeruse.LaunchAndFindApplication(ctx, backend, app)
-		return computerTargetsMsg{setup: setup, targets: resolution.Targets, matched: resolution.Matched, perms: computeruse.ProbePermissions(), err: err}
+		err := setup.ChooseApplication(ctx, index)
+		if err == nil {
+			err = ctx.Err()
+		}
+		return computerTargetsMsg{setup: setup, perms: computeruse.ProbePermissions(), err: err}
 	}
 }
 
@@ -352,15 +321,14 @@ func (m Model) chooseComputerTarget(item string) (tea.Model, tea.Cmd) {
 	}
 	setup := m.session.computerSetup
 	index, err := strconv.Atoi(item)
-	if err != nil || index < 0 || index >= len(setup.targets) {
+	if err != nil || !setup.Select(index) {
 		m.session.cancelComputerSetup()
 		m.menu.close()
 		m.transcript.addSystem("Computer Use: selected window is no longer available.")
 		m.relayout()
 		return m, nil
 	}
-	setup.selected = index
-	target := setup.targets[index]
+	target, _ := setup.Target()
 	label := target.Application
 	if target.Window != "" {
 		label += " · " + target.Window
@@ -370,10 +338,8 @@ func (m Model) chooseComputerTarget(item string) (tea.Model, tea.Cmd) {
 	}
 	info := []pickInfoLine{{Label: "Target", Value: extensions.DisplayText(label, 256)}}
 	rows := []pickItem{{Title: "Observe this window only", Value: "observe", Status: "read screen and accessibility tree", Info: info}}
-	setup.mu.Lock()
-	_, hasPreviewGate := setup.backend.(computeruse.OperatorPreviewBackend)
-	setup.mu.Unlock()
-	if setup.suggested != "" && (m.session.perms == nil || m.session.perms.Mode() != permissions.ReadOnly) {
+	hasPreviewGate := setup.HasPreviewGate()
+	if setup.Suggested() != "" && (m.session.perms == nil || m.session.perms.Mode() != permissions.ReadOnly) {
 		if hasPreviewGate {
 			return m.chooseComputerGrant("control-semantic")
 		}
@@ -403,58 +369,49 @@ func (m Model) chooseComputerGrant(item string) (tea.Model, tea.Cmd) {
 	setup := m.session.computerSetup
 	control := item == "control" || item == "control-semantic"
 	semanticOnly := item == "observe-semantic" || item == "control-semantic"
-	if setup.selected < 0 || setup.selected >= len(setup.targets) || (item != "observe" && item != "control" && !semanticOnly) || (control && m.session.perms != nil && m.session.perms.Mode() == permissions.ReadOnly) {
+	view := setup.View()
+	if view.Selected < 0 || view.Selected >= len(view.Targets) || (item != "observe" && item != "control" && !semanticOnly) || (control && m.session.perms != nil && m.session.perms.Mode() == permissions.ReadOnly) {
 		m.session.cancelComputerSetup()
 		m.menu.close()
 		m.transcript.addSystem("Computer Use: invalid or unavailable grant.")
 		m.relayout()
 		return m, nil
 	}
-	backend := setup.takeBackend()
-	if backend == nil {
+	if _, ok := setup.Target(); !ok {
 		m.session.cancelComputerSetup()
 		m.menu.close()
 		m.transcript.addSystem("Computer Use: target picker expired.")
 		m.relayout()
 		return m, nil
 	}
-	target, cwd := setup.targets[setup.selected], m.session.cwd
+	previewPending := setup.HasPreviewGate() && !semanticOnly
+	cwd := m.session.cwd
 	m.menu.close()
 	m.transcript.addSystem("Opening the separate operator pane; a system-selected window may require local preview confirmation…")
 	m.relayout()
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(setup.ctx, 2*time.Minute)
 		defer cancel()
-		var preview computeruse.OperatorPreview
-		var err error
-		if gate, ok := backend.(computeruse.OperatorPreviewBackend); ok && !semanticOnly {
-			preview, err = gate.PrepareOperatorPreview(ctx, target)
-			if err == nil && preview.ID == "" {
-				err = fmt.Errorf("operator preview did not provide a confirmation identity")
-			}
-		}
-		session := computeruse.New(backend)
-		if err == nil {
-			err = session.Start(ctx, target, computeruse.Capabilities{Observe: true, Control: control})
-		}
-		if err == nil && preview.ID != "" {
-			err = session.InstallOperatorPreview(preview)
-		}
+		session, err := setup.Start(ctx, computersetup.Grant{Control: control, SemanticOnly: semanticOnly})
 		var handle *computeruse.PaneHandle
 		if err == nil {
 			handle, err = computeruse.LaunchOperatorPane(ctx, session, cwd)
 		}
 		if err != nil {
-			_ = session.Close()
+			if session != nil {
+				_ = session.Close()
+			}
 			return computerStartedMsg{setup: setup, err: err}
 		}
 		if !setup.installHandle(handle) {
 			handle.Close()
+			_ = session.Close()
 			return computerStartedMsg{setup: setup, err: context.Canceled}
 		}
-		if preview.ID != "" {
+		if previewPending {
 			if err := session.WaitOperatorPreview(ctx); err != nil {
 				handle.Close()
+				_ = session.Close()
 				return computerStartedMsg{setup: setup, err: err}
 			}
 		}
@@ -463,7 +420,7 @@ func (m Model) chooseComputerGrant(item string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) computerStarted(msg computerStartedMsg) (tea.Model, tea.Cmd) {
-	if m.session == nil || m.session.computerSetup != msg.setup || m.session.header.ID != msg.setup.sessionID {
+	if m.session == nil || m.session.computerSetup != msg.setup || m.session.header.ID != msg.setup.SessionID() {
 		msg.setup.close()
 		return m, nil
 	}
@@ -505,7 +462,7 @@ func (m Model) computerStarted(msg computerStartedMsg) (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, nil
 	}
-	requested := msg.setup.suggested != ""
+	requested := msg.setup.Suggested() != ""
 	m.session.agentCtx.Tools = append(m.session.agentCtx.Tools, tool)
 	m.session.computerTool, m.session.computerPane = tool, handle
 	m.session.cancelComputerSetup()

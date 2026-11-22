@@ -55,6 +55,9 @@ func computerControlError(session *computeruse.Session, err error) agentcore.Age
 		} else if details["reason"] == "focus_restored" {
 			details["recovery"] = "reinspect_after_focus"
 			message += "; focus was restored as expected. Re-observe the same target once before selecting the point again"
+		} else if details["reason"] == "capture_source_changed" {
+			details["recovery"] = "reinspect_after_capture_change"
+			message += "; the window moved between desktops and its pixel grid changed, so the reviewed regions cannot be compared. Take a fresh screenshot of the same target, then act once"
 		} else if !session.Status().Paused && errors.Is(err, computeruse.ErrStaleObservation) {
 			details["recovery"] = "inspect_and_retarget"
 			message += "; no input was sent. Inspect the selected window with a fresh snapshot or screenshot and independently choose a new target; no manual resume is needed"

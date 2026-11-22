@@ -15,7 +15,8 @@ const tileCount = 4 // per axis
 const maxFrameTokenBytes = 512 + (tileCount*tileCount*sha256.Size*4+2)/3
 
 type frameFingerprint struct {
-	tiles []byte
+	tiles         []byte
+	width, height int
 }
 
 func fingerprintFrame(pngBytes []byte) (frameFingerprint, error) {
@@ -50,7 +51,7 @@ func fingerprintFrame(pngBytes []byte) (frameFingerprint, error) {
 			tiles[y*tileCount/height*tileCount+col].Write(row[8*left : 8*right])
 		}
 	}
-	var out frameFingerprint
+	out := frameFingerprint{width: cfg.Width, height: cfg.Height}
 	for _, tile := range tiles {
 		d := tile.Sum(nil)
 		// Regional equality supplements, but never replaces, native AX checks.

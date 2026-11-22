@@ -19,6 +19,7 @@ import (
 
 	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/gui/terminalaccess"
+	"github.com/getan/golder/internal/computersetup"
 	"github.com/getan/golder/internal/computeruse"
 	"github.com/getan/golder/internal/remotecontrol"
 )
@@ -236,12 +237,8 @@ type App struct {
 	computerError            string
 	computerPermission       computeruse.PermissionState
 	computerPermissionNote   string
-	computerBackend          computeruse.PlatformBackend
+	computerSetup            *computersetup.Setup
 	computerSession          *computeruse.Session
-	computerTargets          []computeruse.Target
-	computerApplications     []computeruse.Application
-	computerSelected         int
-	computerMatched          bool
 	computerSuggested        string
 	computerRequestPicker    bool
 	computerFrame            *ui.Bitmap

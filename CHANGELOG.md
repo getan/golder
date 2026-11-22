@@ -16,6 +16,20 @@ interactive REPL/TUI.
   open. The Windows GUI packaging workflow exercises the menu and picker on a
   real Windows runner; see [v1.5.70 notes](docs/releases/v1.5.70.md).
 
+## [1.5.129] - 2026-11-22
+
+### Computer Use
+- Move desktop application resolution, window auto-selection, grant choice and
+  session start into `internal/computersetup`, so the TUI and the GUI make the
+  same decisions and only render them differently.
+- GUI: a requested application now follows the shared plan and preview rules;
+  its private resolution state is gone.
+- Keep one capture path per window and compare region digests only on the same
+  pixel grid, so a window that moved between desktops reports
+  `capture_source_changed` instead of a false "content changed" refusal.
+- Prefer an application's working window over small indicator windows when a
+  launch publishes both, and order the window picker the same way.
+
 ## [1.5.67] - 2026-11-09
 
 ### Fixed

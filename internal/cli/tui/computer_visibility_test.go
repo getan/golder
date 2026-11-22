@@ -7,7 +7,7 @@ import (
 
 func TestComputerNoWindowsExplainsHowToRetry(t *testing.T) {
 	s := newRemoteTestSession(t)
-	setup := newComputerSetup(s.header.ID)
+	setup := newComputerSetup(s.header.ID, "", false, nil)
 	s.computerSetup = setup
 	m := NewModel(Options{})
 	m.session = s

@@ -46,6 +46,8 @@ typedef struct {
 	char application[256];
 	char bundle[4096];
 	char title[512];
+	double width;
+	double height;
 } cu_window;
 
 static void cu_string(CFTypeRef v, char *out, size_t n) {
@@ -100,6 +102,8 @@ static int cu_windows(cu_window *out, int cap, int all_spaces) {
 		if (!cu_running_bundle(pid, entry.bundle, sizeof(entry.bundle))) continue;
 		cu_string(CFDictionaryGetValue(d, kCGWindowOwnerName), entry.application, sizeof(entry.application));
 		cu_string(CFDictionaryGetValue(d, kCGWindowName), entry.title, sizeof(entry.title));
+		entry.width = bounds.size.width;
+		entry.height = bounds.size.height;
 		if (entry.application[0] == 0) continue;
 		if (count < cap) out[count] = entry;
 		count++;
@@ -1865,6 +1869,12 @@ import (
 	"unsafe"
 )
 
+const (
+	captureSourceSkyLight   = "skylight"
+	captureSourceStream     = "stream"
+	captureSourceScreenshot = "screenshot"
+)
+
 // MacWindowCatalog is a non-prompting operator-facing window inventory and AX
 // adapter with frame-bound, fail-closed coordinate input.
 type MacWindowCatalog struct {
@@ -1873,6 +1883,7 @@ type MacWindowCatalog struct {
 	applications map[string]macApplication
 	pinned       map[string]C.AXUIElementRef
 	refs         map[string]C.AXUIElementRef
+	capturedVia  map[string]string // last successful capture path per target
 	snapshotID   string
 	snapshotFor  string
 	snapshotAX   AXTreeStatus
@@ -2009,7 +2020,15 @@ func (c *MacWindowCatalog) targets(ctx context.Context, allSpaces bool, applicat
 		id := hex.EncodeToString(nonce[:])
 		next[id] = window
 		detail := fmt.Sprintf("PID %d · Window %d", int32(window.pid), uint32(window.window_id))
-		out = append(out, Target{ID: id, Application: C.GoString(&window.application[0]), ApplicationID: C.GoString(&window.bundle[0]), Window: C.GoString(&window.title[0]), Detail: detail})
+		out = append(out, Target{
+			ID:            id,
+			Application:   C.GoString(&window.application[0]),
+			ApplicationID: C.GoString(&window.bundle[0]),
+			Window:        C.GoString(&window.title[0]),
+			Detail:        detail,
+			Width:         float64(window.width),
+			Height:        float64(window.height),
+		})
 	}
 	for _, ref := range c.pinned {
 		C.cu_ax_release(ref)
@@ -2017,7 +2036,7 @@ func (c *MacWindowCatalog) targets(ctx context.Context, allSpaces bool, applicat
 	c.pinned = make(map[string]C.AXUIElementRef)
 	c.clearSnapshotLocked()
 	c.windows = next
-	return out, nil
+	return orderWorkingWindows(out), nil
 }
 
 func macWindowOnScreenFlag(value int) bool {
@@ -2418,6 +2437,11 @@ type macFrameBinding struct {
 	Target string
 	X, Y   float64
 	W, H   float64
+	// PX/PY are the captured pixel grid. Two paths can return the same window
+	// at different scales, and a digest comparison across grids proves nothing.
+	PX     int    `json:"px,omitempty"`
+	PY     int    `json:"py,omitempty"`
+	Source string `json:"s,omitempty"`
 	Nonce  string `json:"n"`
 	Tiles  []byte `json:"t,omitempty"`
 }
@@ -2457,18 +2481,28 @@ func (c *MacWindowCatalog) CaptureBound(ctx context.Context, target Target) ([]b
 	}
 	done := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
+	onScreen := C.cu_window_is_on_screen(window.window_id, window.pid) != 0
+	c.mu.Lock()
+	previous := c.capturedVia[target.ID]
+	c.mu.Unlock()
+	// ScreenCaptureKit and one-shot captures return the last composited image
+	// off the current Space, so a window that left the desktop must be read
+	// from the backing store. Once a window has been read that way, keep it
+	// there: both paths return the same content on different pixel grids, and a
+	// grid change would invalidate every reviewed region.
+	source := captureSourceSkyLight
 	var captured C.int
-	if C.cu_window_is_on_screen(window.window_id, window.pid) == 0 {
-		// ScreenCaptureKit and one-shot captures return the last composited
-		// image off the current Space. Read the backing store directly.
+	if preferBackingStore(onScreen, previous) {
 		captured = C.cu_capture_window_skylight(window.window_id, &data, &length, &x, &y, &w, &h)
 	}
 	if captured == 0 {
 		var at C.double
 		var frameStatus C.int
+		source = captureSourceStream
 		captured = C.cu_stream_latest(C.int32_t(window.pid), window.window_id, 1.5, &data, &length, &at, &frameStatus, &x, &y, &w, &h, unsafe.Pointer(flag))
 	}
 	if captured == 0 {
+		source = captureSourceScreenshot
 		captured = C.cu_capture_window(C.uint32_t(window.pid), window.window_id, &data, &length, &x, &y, &w, &h, unsafe.Pointer(flag))
 	}
 	if !stop() {
@@ -2502,11 +2536,40 @@ func (c *MacWindowCatalog) CaptureBound(ctx context.Context, target Target) ([]b
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, "", err
 	}
-	binding, err := json.Marshal(macFrameBinding{Target: target.ID, X: float64(x), Y: float64(y), W: float64(w), H: float64(h), Nonce: hex.EncodeToString(nonce[:]), Tiles: pixels.tiles})
+	c.mu.Lock()
+	if c.capturedVia == nil {
+		c.capturedVia = make(map[string]string)
+	}
+	c.capturedVia[target.ID] = source
+	c.mu.Unlock()
+	binding, err := json.Marshal(macFrameBinding{
+		Target: target.ID,
+		X:      float64(x), Y: float64(y), W: float64(w), H: float64(h),
+		PX: pixels.width, PY: pixels.height, Source: source,
+		Nonce: hex.EncodeToString(nonce[:]), Tiles: pixels.tiles,
+	})
 	if err != nil {
 		return nil, "", err
 	}
 	return image, string(binding), nil
+}
+
+// preferBackingStore decides whether a window must be read from its backing
+// store instead of ScreenCaptureKit. A window off the current desktop always
+// must; a window already read that way stays there so its pixel grid does not
+// flap between captures.
+func preferBackingStore(onScreen bool, previous string) bool {
+	return !onScreen || previous == captureSourceSkyLight
+}
+
+// capturedGridChanged reports whether two captures of the same window used a
+// different pixel grid. Tile digests are only comparable on one grid, so a
+// changed grid must be re-observed rather than reported as changed content.
+func capturedGridChanged(before, after macFrameBinding) bool {
+	if before.PX == 0 || after.PX == 0 {
+		return false // tokens without a grid keep the previous behavior
+	}
+	return before.PX != after.PX || before.PY != after.PY
 }
 
 func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, token string, x, y float64) (PointInspection, error) {
@@ -2523,6 +2586,9 @@ func (c *MacWindowCatalog) InspectPoint(ctx context.Context, target Target, toke
 	}
 	if old.X != now.X || old.Y != now.Y || old.W != now.W || old.H != now.H {
 		return PointInspection{}, staleReason("window_geometry_changed", "observe the moved window again")
+	}
+	if capturedGridChanged(old, now) {
+		return PointInspection{}, staleReason("capture_source_changed", "the window moved between capture paths; inspect its current frame")
 	}
 	c.mu.Lock()
 	w, ok := c.windows[target.ID]
@@ -2751,6 +2817,9 @@ func dispatchReviewedFrame(target Target, token string, capture func() (string, 
 	}
 	if current.X != binding.X || current.Y != binding.Y || current.W != binding.W || current.H != binding.H {
 		return noInputError(staleReason("window_geometry_changed", "the window moved or resized after the reviewed frame"))
+	}
+	if capturedGridChanged(binding, current) {
+		return noInputError(staleReason("capture_source_changed", "the window was captured at a different pixel grid, so its regions cannot be compared; inspect the current frame before acting"))
 	}
 	if regions != 0 && !sameRegions(binding.Tiles, current.Tiles, regions) {
 		return noInputError(staleReason("action_region_changed", "the reviewed target or action context changed; inspect before choosing another action"))

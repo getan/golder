@@ -32,17 +32,10 @@ func (a *App) view(c *ui.Context) {
 		a.computerSetupStop = nil
 		a.computerSetupSeq++
 		a.computerBusy = false
-		if a.computerBackend != nil {
-			backend := a.computerBackend
-			a.computerBackend = nil
-			go backend.Close()
-		}
+		a.discardComputerSetup()
 	}
-	if !a.computerPickerOpen && a.computerBackend != nil && a.computerSession == nil {
-		backend := a.computerBackend
-		a.computerBackend = nil
-		a.computerTargets = nil
-		go backend.Close()
+	if !a.computerPickerOpen && a.computerSetup != nil && a.computerSession == nil {
+		a.discardComputerSetup()
 	}
 	if !a.settingsOpen {
 		// The password field is write-only. Dismissing Settings must not retain a

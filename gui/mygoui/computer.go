@@ -17,6 +17,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"github.com/getan/golder/internal/computersetup"
 	"github.com/getan/golder/internal/computeruse"
 )
 
@@ -122,142 +123,148 @@ func (a *App) loadComputerTargets() {
 	if a.computerBusy || a.win == nil || a.ctrl == nil {
 		return
 	}
-	if a.computerBackend != nil {
-		old := a.computerBackend
-		a.computerBackend = nil
-		go old.Close()
-	}
+	a.discardComputerSetup()
 	a.computerBusy, a.computerError = true, ""
-	a.computerTargets, a.computerSelected = nil, -1
-	a.computerApplications = nil
 	a.clearComputerCandidate()
 	a.computerPreviewFailed, a.computerSkipPreview = false, false
 	a.computerSetupSeq++
-	seq, win, suggested, conversation, ctrl := a.computerSetupSeq, a.win, a.computerSuggested, a.status.SessionID, a.ctrl
+	seq, win, ctrl := a.computerSetupSeq, a.win, a.ctrl
+	conversation := a.status.SessionID
+	setup := computersetup.New(computersetup.Options{
+		SessionID: conversation,
+		Suggested: a.computerSuggested,
+		ReadOnly:  a.status.Permission == "read-only",
+		Guard:     func() error { return ctrl.CheckComputerLaunch(conversation) },
+	})
+	a.computerSetup = setup
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	ctx = computeruse.WithApplicationLaunchGuard(ctx, func() error { return ctrl.CheckComputerLaunch(conversation) })
 	a.computerSetupStop = cancel
 	go func() {
-		backend, err := computeruse.NewPlatformBackend()
-		var resolution computeruse.ApplicationResolution
-		if err == nil {
-			resolution, err = computeruse.ResolveApplication(ctx, backend, suggested)
-		}
-		permissions := computeruse.ProbePermissions()
+		err := setup.Resolve(ctx)
+		state := computeruse.ProbePermissions()
 		win.Update(func() {
 			defer cancel()
-			if seq != a.computerSetupSeq || !a.computerPickerOpen {
-				if backend != nil {
-					go backend.Close()
-				}
+			if seq != a.computerSetupSeq || !a.computerPickerOpen || a.computerSetup != setup {
+				setup.Close()
 				return
 			}
 			a.computerBusy, a.computerSetupStop = false, nil
-			a.computerPermission = permissions
+			a.computerPermission = state
 			if ctx.Err() != nil {
 				a.computerError = ctx.Err().Error()
-				if backend != nil {
-					go backend.Close()
-				}
+				a.discardComputerSetup()
 				return
 			}
 			if err != nil {
-				a.computerError = computeruse.DescribeFailure(err, permissions)
-				if backend != nil {
-					go backend.Close()
-				}
+				a.setComputerFailure(err)
+				a.discardComputerSetup()
 				return
 			}
-			a.computerBackend = backend
-			a.applyComputerResolution(resolution)
+			a.applyComputerPlan(setup)
 		})
 	}()
 }
 
-func (a *App) applyComputerResolution(resolution computeruse.ApplicationResolution) {
-	a.computerApplications = resolution.Applications
-	a.computerTargets, a.computerSelected = resolution.Targets, -1
-	a.computerMatched = resolution.Matched
-	if resolution.NotFound {
-		a.computerError = "No installed application matched the requested name. Choose a window, or search again with the application's installed or localized name."
-	}
-	if a.computerSuggested == "" {
+// discardComputerSetup releases a catalog no session has taken. Closing is
+// asynchronous so a UI frame never waits on the platform backend.
+func (a *App) discardComputerSetup() {
+	if a.computerSetup == nil {
 		return
 	}
-	plan := computeruse.PlanApplicationSetup(resolution, a.computerSuggested)
-	if plan.Action == computeruse.SetupStartTarget {
-		a.computerSelected = plan.TargetIndex
-		if a.status.Permission != "read-only" {
-			// Portals that require a system-selected preview remain semantic-only
-			// until the person explicitly chooses a matching capture source.
-			_, a.computerSkipPreview = a.computerBackend.(computeruse.OperatorPreviewBackend)
-			a.startComputer(true)
-		}
+	setup := a.computerSetup
+	a.computerSetup = nil
+	setup.Close()
+}
+
+// applyComputerPlan follows the plan the TUI uses too: a unique requested
+// window starts with control, ambiguity stays with the person.
+func (a *App) applyComputerPlan(setup *computersetup.Setup) {
+	if view := setup.View(); view.NotFound {
+		a.computerError = "No installed application matched the requested name. Choose a window, or search again with the application's installed or localized name."
 	}
+	if setup.Suggested() == "" || a.status.Permission == "read-only" {
+		return
+	}
+	if setup.Plan().Action != computeruse.SetupStartTarget {
+		return
+	}
+	a.startComputerSetup(setup, setup.AutoGrant())
 }
 
 func (a *App) launchComputerApplication(index int) {
-	if a.computerBusy || a.computerBackend == nil || a.win == nil || a.ctrl == nil || index < 0 || index >= len(a.computerApplications) {
+	setup := a.computerSetup
+	if a.computerBusy || setup == nil || a.win == nil || a.ctrl == nil {
 		return
 	}
-	app, backend := a.computerApplications[index], a.computerBackend
+	if view := setup.View(); index < 0 || index >= len(view.Applications) {
+		return
+	}
 	a.computerBusy, a.computerError = true, ""
 	a.computerSetupSeq++
-	seq, win, conversation, ctrl := a.computerSetupSeq, a.win, a.status.SessionID, a.ctrl
+	seq, win := a.computerSetupSeq, a.win
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	ctx = computeruse.WithApplicationLaunchGuard(ctx, func() error { return ctrl.CheckComputerLaunch(conversation) })
 	a.computerSetupStop = cancel
 	go func() {
-		resolution, err := computeruse.LaunchAndFindApplication(ctx, backend, app)
+		err := setup.ChooseApplication(ctx, index)
 		win.Update(func() {
 			defer cancel()
-			if seq != a.computerSetupSeq || !a.computerPickerOpen || a.computerBackend != backend {
+			if seq != a.computerSetupSeq || !a.computerPickerOpen || a.computerSetup != setup {
 				return
 			}
 			a.computerBusy, a.computerSetupStop = false, nil
 			if err != nil {
 				a.setComputerFailure(err)
+				a.discardComputerSetup()
 				return
 			}
-			a.applyComputerResolution(resolution)
+			a.applyComputerPlan(setup)
 		})
 	}()
 }
 
 func (a *App) startComputer(control bool) {
-	if a.computerBusy || a.computerBackend == nil || a.ctrl == nil || a.win == nil || a.computerSelected < 0 || a.computerSelected >= len(a.computerTargets) {
+	setup := a.computerSetup
+	if setup == nil {
 		return
 	}
-	if control && a.status.Permission == "read-only" {
+	a.startComputerSetup(setup, computersetup.Grant{Control: control, SemanticOnly: a.computerSkipPreview})
+}
+
+func (a *App) startComputerSetup(setup *computersetup.Setup, grant computersetup.Grant) {
+	if a.computerBusy || a.ctrl == nil || a.win == nil || setup != a.computerSetup {
+		return
+	}
+	if grant.Control && a.status.Permission == "read-only" {
 		a.computerError = "Control is unavailable while the session is read-only."
 		return
 	}
-	target := a.computerTargets[a.computerSelected]
-	gate, requiresPreview := a.computerBackend.(computeruse.OperatorPreviewBackend)
-	if requiresPreview && !a.computerSkipPreview {
+	target, ok := setup.Target()
+	if !ok {
+		return
+	}
+	if setup.HasPreviewGate() && !grant.SemanticOnly {
 		if a.computerCandidateID == "" {
-			a.prepareComputerCandidate(gate, target, control)
+			a.prepareComputerCandidate(setup, target, grant.Control)
 			return
 		}
-		if a.computerCandidateTarget != target.ID || a.computerCandidateControl != control || a.computerCandidateSession != a.status.SessionID {
+		if a.computerCandidateTarget != target.ID || a.computerCandidateControl != grant.Control || a.computerCandidateSession != a.status.SessionID {
 			a.computerError = "The preview no longer matches the selected window or grant."
 			return
 		}
 	}
 	a.computerBusy, a.computerError = true, ""
 	a.computerSetupSeq++
-	seq, win, backend, ctrl := a.computerSetupSeq, a.win, a.computerBackend, a.ctrl
+	seq, win, ctrl := a.computerSetupSeq, a.win, a.ctrl
 	conversation, candidateID := a.status.SessionID, a.computerCandidateID
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	a.computerSetupStop = cancel
 	go func() {
-		session := computeruse.New(backend)
+		var session *computeruse.Session
 		var err error
-		if requiresPreview && candidateID != "" {
-			err = gate.ConfirmOperatorPreview(ctx, target, candidateID)
-		}
-		if err == nil {
-			err = session.Start(ctx, target, computeruse.Capabilities{Observe: true, Control: control})
+		if candidateID != "" {
+			session, err = setup.StartConfirmed(ctx, grant, candidateID)
+		} else {
+			session, err = setup.Start(ctx, grant)
 		}
 		attached := false
 		if err == nil {
@@ -272,7 +279,9 @@ func (a *App) startComputer(control bool) {
 				if attached {
 					ctrl.DetachComputer(session)
 				}
-				session.Stop()
+				if session != nil {
+					_ = session.Close()
+				}
 				return
 			}
 			a.computerBusy, a.computerSetupStop = false, nil
@@ -280,7 +289,10 @@ func (a *App) startComputer(control bool) {
 				if attached {
 					ctrl.DetachComputer(session)
 				}
-				session.Stop()
+				if session != nil {
+					_ = session.Close()
+				}
+				a.discardComputerSetup()
 				a.clearComputerCandidate()
 				a.computerError = ctx.Err().Error()
 				return
@@ -288,14 +300,17 @@ func (a *App) startComputer(control bool) {
 			if err != nil {
 				a.setComputerFailure(err)
 				a.clearComputerCandidate()
-				session.Stop()
+				if session != nil {
+					_ = session.Close()
+				}
+				a.discardComputerSetup()
 				return
 			}
-			requested := a.computerSuggested != ""
+			requested := setup.Suggested() != ""
+			a.computerSetup = nil // the session owns the catalog now
 			a.computerSuggested = ""
 			a.computerRequestPicker = false
 			ctrl.ResetComputerRequest()
-			a.computerBackend = nil // ownership transferred to session
 			a.computerSession, a.computerPickerOpen = session, false
 			installComputerPauseItem(session)
 			a.clearComputerCandidate()
@@ -320,14 +335,14 @@ func (a *App) clearComputerCandidate() {
 	a.computerCandidateControl = false
 }
 
-func (a *App) prepareComputerCandidate(gate computeruse.OperatorPreviewBackend, target computeruse.Target, control bool) {
+func (a *App) prepareComputerCandidate(setup *computersetup.Setup, target computeruse.Target, control bool) {
 	a.computerBusy, a.computerError, a.computerPreviewFailed = true, "", false
 	a.computerSetupSeq++
 	seq, win, conversation := a.computerSetupSeq, a.win, a.status.SessionID
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	a.computerSetupStop = cancel
 	go func() {
-		preview, err := gate.PrepareOperatorPreview(ctx, target)
+		_, preview, err := setup.PreparePreview(ctx)
 		var bitmap *ui.Bitmap
 		if err == nil {
 			config, format, decodeErr := image.DecodeConfig(bytes.NewReader(preview.PNG))
@@ -406,13 +421,8 @@ func (a *App) parkComputerPanel() {
 	a.computerPickerOpen, a.computerBusy = false, false
 	a.computerSuggested, a.computerRequestPicker = "", false
 	a.computerSession = nil
-	if a.computerBackend != nil {
-		backend := a.computerBackend
-		a.computerBackend = nil
-		go backend.Close()
-	}
-	a.computerTargets, a.computerFrame = nil, nil
-	a.computerApplications = nil
+	a.discardComputerSetup()
+	a.computerFrame = nil
 	a.clearComputerCandidate()
 	a.computerPreviewFailed, a.computerSkipPreview = false, false
 }
@@ -439,12 +449,8 @@ func (a *App) stopComputer() {
 		a.computerSession = nil
 		go session.Close()
 	}
-	if a.computerBackend != nil {
-		backend := a.computerBackend
-		a.computerBackend = nil
-		go backend.Close()
-	}
-	a.computerTargets, a.computerFrame = nil, nil
+	a.discardComputerSetup()
+	a.computerFrame = nil
 	a.clearComputerCandidate()
 	a.computerPreviewFailed, a.computerSkipPreview = false, false
 }
@@ -523,10 +529,14 @@ func (a *App) computerPicker(c *ui.Context) {
 	ui.Modal(c, &a.computerPickerOpen, func() {
 		ui.Column(c).Width(620).MaxHeight(650).Gap(10).Children(func() {
 			ui.Text(c, "Computer Use").FontSize(16).Bold()
+			setup, view := a.computerSetup, computersetup.View{}
+			if setup != nil {
+				view = setup.View()
+			}
 			if a.computerCandidate != nil && a.computerCandidateID != "" {
 				ui.Text(c, "Confirm the system-selected preview is the same window you selected in Golder. Until you confirm, the image is local and unavailable to the agent.").FontSize(12).TextColor(t.TextMuted).Wrap()
-				if a.computerSelected >= 0 && a.computerSelected < len(a.computerTargets) {
-					target := a.computerTargets[a.computerSelected]
+				if view.Selected >= 0 && view.Selected < len(view.Targets) {
+					target := view.Targets[view.Selected]
 					ui.Text(c, "Selected: "+target.Application+" · "+target.Window).FontSize(12).Bold().Wrap()
 				}
 				ui.Image(c, a.computerCandidate).Width(590).Height(320).Fit(ui.Contain)
@@ -545,14 +555,14 @@ func (a *App) computerPicker(c *ui.Context) {
 				})
 				return
 			}
-			if len(a.computerApplications) > 0 {
+			if len(view.Applications) > 0 {
 				ui.Text(c, "Several installed applications match. Select the application to open:").FontSize(12).TextColor(t.TextMuted).Wrap()
 				if a.computerError != "" {
 					ui.Text(c, a.computerError).FontSize(11).TextColor(t.Warning).Wrap()
 				}
 				ui.Scroll(c).MaxHeight(340).Children(func() {
 					ui.Column(c).Gap(4).Children(func() {
-						for i, app := range a.computerApplications {
+						for i, app := range view.Applications {
 							i, app := i, app
 							label := app.Name + " · " + app.Detail
 							if app.BundleID != "" {
@@ -572,7 +582,7 @@ func (a *App) computerPicker(c *ui.Context) {
 			ui.Text(c, "Choose one application window. Its contents may be sent to your configured model provider when the agent requests a snapshot or screenshot. System permissions do not grant the agent authority to switch targets.").FontSize(12).TextColor(t.TextMuted).Wrap()
 			if a.computerSuggested != "" {
 				ui.Text(c, "Requested application: "+a.computerSuggested+". A unique matching window is selected automatically; only multiple matches need your choice.").FontSize(11).TextColor(t.TextMuted).Wrap()
-				if !a.computerBusy && a.computerBackend != nil && !a.computerMatched {
+				if !a.computerBusy && setup != nil && !view.Matched {
 					ui.Text(c, "No exact match; choose another window or cancel.").FontSize(11).TextColor(t.Warning).Wrap()
 				}
 			}
@@ -595,7 +605,7 @@ func (a *App) computerPicker(c *ui.Context) {
 			}
 			ui.Scroll(c).MaxHeight(340).Children(func() {
 				ui.Column(c).Gap(4).Children(func() {
-					for i, target := range a.computerTargets {
+					for i, target := range view.Targets {
 						i, target := i, target
 						label := target.Application
 						if target.Window != "" {
@@ -604,10 +614,10 @@ func (a *App) computerPicker(c *ui.Context) {
 						if target.Detail != "" {
 							label += " · " + target.Detail
 						}
-						if subtleButton(c.Key(target.ID), label, a.computerBusy).FillWidth().Selected(a.computerSelected == i).Clicked() {
-							a.computerSelected = i
-							if a.computerSuggested != "" && a.status.Permission != "read-only" {
-								_, a.computerSkipPreview = a.computerBackend.(computeruse.OperatorPreviewBackend)
+						if subtleButton(c.Key(target.ID), label, a.computerBusy).FillWidth().Selected(view.Selected == i).Clicked() {
+							selected := setup != nil && setup.Select(i)
+							if selected && a.computerSuggested != "" && a.status.Permission != "read-only" {
+								a.computerSkipPreview = setup.HasPreviewGate()
 								a.startComputer(true)
 							}
 						}
@@ -628,10 +638,10 @@ func (a *App) computerPicker(c *ui.Context) {
 						a.resumeQueued()
 					}
 				}
-				if subtleButton(c, "View only", a.computerBusy || a.computerSelected < 0).Clicked() {
+				if subtleButton(c, "View only", a.computerBusy || view.Selected < 0).Clicked() {
 					a.startComputer(false)
 				}
-				if subtlePrimaryButton(c, "Allow control", a.computerBusy || a.computerSelected < 0 || a.status.Permission == "read-only").Clicked() {
+				if subtlePrimaryButton(c, "Allow control", a.computerBusy || view.Selected < 0 || a.status.Permission == "read-only").Clicked() {
 					a.startComputer(true)
 				}
 			})

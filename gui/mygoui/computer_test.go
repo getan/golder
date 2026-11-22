@@ -10,6 +10,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/getan/golder/internal/computersetup"
 	"github.com/getan/golder/internal/computeruse"
 )
 
@@ -18,11 +19,46 @@ type computerUIBackend struct{}
 func (computerUIBackend) Validate(context.Context, computeruse.Target, bool) error { return nil }
 func (computerUIBackend) Close() error                                             { return nil }
 
+type computerTestBackend struct {
+	targets []computeruse.Target
+	apps    []computeruse.Application
+}
+
+func (b *computerTestBackend) Targets(context.Context) ([]computeruse.Target, error) {
+	return b.targets, nil
+}
+
+func (b *computerTestBackend) Validate(context.Context, computeruse.Target, bool) error { return nil }
+func (b *computerTestBackend) Close() error                                             { return nil }
+
+func (b *computerTestBackend) Applications(context.Context, string) ([]computeruse.Application, error) {
+	return b.apps, nil
+}
+
+func (b *computerTestBackend) LaunchApplication(context.Context, computeruse.Application) error {
+	return nil
+}
+
+// resolvedSetup drives the same resolution the GUI runs, with a fake catalog.
+func resolvedSetup(t *testing.T, suggested string, targets []computeruse.Target, apps []computeruse.Application) *computersetup.Setup {
+	t.Helper()
+	backend := &computerTestBackend{targets: targets, apps: apps}
+	setup := computersetup.New(computersetup.Options{
+		SessionID: "test",
+		Suggested: suggested,
+		Backend:   func() (computeruse.PlatformBackend, error) { return backend, nil },
+	})
+	if err := setup.Resolve(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(setup.Close)
+	return setup
+}
+
 func TestComputerPickerShowsExplicitScopeAndControlChoice(t *testing.T) {
 	a := testApp()
 	a.computerPickerOpen = true
-	a.computerTargets = []computeruse.Target{{ID: "opaque", Application: "Calculator", Window: "Calculator"}}
-	a.computerSelected = 0
+	a.computerSetup = resolvedSetup(t, "", []computeruse.Target{{ID: "opaque", Application: "Calculator", Window: "Calculator"}}, nil)
 	tt := ui.NewTester(a.view, 1200, 800)
 	for _, want := range []string{"Computer Use", "Calculator · Calculator", "View only", "Allow control", "Cancel"} {
 		if !tt.HasText(want) {
@@ -88,8 +124,10 @@ func TestMacComputerPermissionRefreshShowsFeedback(t *testing.T) {
 func TestComputerPickerRequiresLocalPreviewConfirmation(t *testing.T) {
 	a := testApp()
 	a.computerPickerOpen = true
-	a.computerTargets = []computeruse.Target{{ID: "opaque", Application: "Calculator", Window: "Main"}}
-	a.computerSelected = 0
+	a.computerSetup = resolvedSetup(t, "", []computeruse.Target{{ID: "opaque", Application: "Calculator", Window: "Main"}}, nil)
+	if !a.computerSetup.Select(0) {
+		t.Fatal("selection refused")
+	}
 	a.computerCandidate = ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 8, 8)))
 	a.computerCandidateID, a.computerCandidateTarget = "candidate", "opaque"
 	tt := ui.NewTester(a.view, 1200, 800)
@@ -145,10 +183,10 @@ func TestComputerPanelOpensBehindManualDrawer(t *testing.T) {
 func TestComputerPickerDistinguishesDuplicateWindowNames(t *testing.T) {
 	a := testApp()
 	a.computerPickerOpen = true
-	a.computerTargets = []computeruse.Target{
+	a.computerSetup = resolvedSetup(t, "", []computeruse.Target{
 		{ID: "one", Application: "Calculator", Window: "Main", Detail: "PID 42 · Window 1"},
 		{ID: "two", Application: "Calculator", Window: "Main", Detail: "PID 42 · Window 2"},
-	}
+	}, nil)
 	tt := ui.NewTester(a.view, 1200, 800)
 	for _, want := range []string{"Calculator · Main · PID 42 · Window 1", "Calculator · Main · PID 42 · Window 2"} {
 		if !tt.HasText(want) {
@@ -157,21 +195,30 @@ func TestComputerPickerDistinguishesDuplicateWindowNames(t *testing.T) {
 	}
 }
 
-func TestComputerResolutionPreselectsOnlyUniqueTarget(t *testing.T) {
+func TestComputerSetupPreselectsOnlyUniqueTarget(t *testing.T) {
 	a := testApp()
 	a.computerSuggested = "Calculator"
 	a.status.Permission = "read-only" // no native window is needed in this test
-	unique := computeruse.ApplicationResolution{Matched: true, Targets: []computeruse.Target{{ID: "one", Application: "计算器"}}}
-	a.applyComputerResolution(unique)
-	if a.computerSelected != 0 || !a.computerMatched {
-		t.Fatalf("unique target was not selected: %+v", a.computerTargets)
+	// A localized window owner shares the installed application's identity, so
+	// the shared resolution selects it without a second launch.
+	identity := "/Applications/Calculator.app"
+	installed := []computeruse.Application{{ID: "app", Name: "Calculator", Identity: identity}}
+	unique := resolvedSetup(t, "Calculator", []computeruse.Target{{ID: "one", Application: "计算器", ApplicationID: identity}}, installed)
+	a.applyComputerPlan(unique)
+	if view := unique.View(); view.Selected != 0 || !view.Matched {
+		t.Fatalf("unique target was not selected: %+v", view)
 	}
-	a.applyComputerResolution(computeruse.ApplicationResolution{Matched: true, Targets: []computeruse.Target{{ID: "one"}, {ID: "two"}}})
-	if a.computerSelected != -1 {
+	ambiguous := resolvedSetup(t, "Calculator", []computeruse.Target{
+		{ID: "one", Application: "计算器", ApplicationID: identity},
+		{ID: "two", Application: "计算器", ApplicationID: identity},
+	}, installed)
+	a.applyComputerPlan(ambiguous)
+	if view := ambiguous.View(); view.Selected != -1 {
 		t.Fatal("ambiguous windows were selected automatically")
 	}
-	a.applyComputerResolution(computeruse.ApplicationResolution{Targets: []computeruse.Target{{ID: "other", Application: "Notes"}}})
-	if a.computerSelected != -1 || a.computerMatched {
+	unrelated := resolvedSetup(t, "Calculator", []computeruse.Target{{ID: "other", Application: "Notes"}}, nil)
+	a.applyComputerPlan(unrelated)
+	if view := unrelated.View(); view.Selected != -1 || view.Matched {
 		t.Fatal("an unrelated window was selected automatically")
 	}
 }
@@ -180,10 +227,10 @@ func TestComputerRequestedPickerExplainsAutomaticSelection(t *testing.T) {
 	a := testApp()
 	a.computerPickerOpen = true
 	a.computerSuggested = "Calculator"
-	a.applyComputerResolution(computeruse.ApplicationResolution{Matched: true, Targets: []computeruse.Target{
+	a.computerSetup = resolvedSetup(t, "Calculator", []computeruse.Target{
 		{ID: "main", Application: "Calculator", Window: "Main"},
 		{ID: "history", Application: "Calculator", Window: "History"},
-	}})
+	}, nil)
 	tt := ui.NewTester(a.view, 1200, 800)
 	for _, want := range []string{"A unique matching window is selected automatically", "only multiple matches need your choice", "Calculator · Main", "Calculator · History"} {
 		if !tt.HasText(want) {
@@ -195,10 +242,10 @@ func TestComputerRequestedPickerExplainsAutomaticSelection(t *testing.T) {
 func TestComputerPickerDistinguishesInstalledApplications(t *testing.T) {
 	a := testApp()
 	a.computerPickerOpen = true
-	a.computerApplications = []computeruse.Application{
+	a.computerSetup = resolvedSetup(t, "Calculator", nil, []computeruse.Application{
 		{ID: "one", Name: "Calculator", Detail: "/Applications/Calculator.app"},
 		{ID: "two", Name: "Calculator", Detail: "/System/Applications/Calculator.app"},
-	}
+	})
 	tt := ui.NewTester(a.view, 1200, 800)
 	for _, want := range []string{"Calculator · /Applications/Calculator.app", "Calculator · /System/Applications/Calculator.app"} {
 		if !tt.HasText(want) {
