@@ -184,18 +184,9 @@ func (a *App) applyComputerResolution(resolution computeruse.ApplicationResoluti
 	if a.computerSuggested == "" {
 		return
 	}
-	if len(resolution.Targets) == 0 && len(resolution.Applications) == 1 {
-		// The requested app is installed but has no window yet; the TUI opens
-		// its application picker for this case, while the GUI previously fell
-		// through to an empty window list.
-		a.launchComputerApplication(0)
-		return
-	}
-	if !resolution.Matched {
-		return
-	}
-	if len(resolution.Targets) == 1 {
-		a.computerSelected = 0
+	plan := computeruse.PlanApplicationSetup(resolution, a.computerSuggested)
+	if plan.Action == computeruse.SetupStartTarget {
+		a.computerSelected = plan.TargetIndex
 		if a.status.Permission != "read-only" {
 			// Portals that require a system-selected preview remain semantic-only
 			// until the person explicitly chooses a matching capture source.

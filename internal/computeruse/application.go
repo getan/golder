@@ -128,6 +128,47 @@ func ResolveApplication(ctx context.Context, backend PlatformBackend, name strin
 	return LaunchAndFindApplication(ctx, backend, apps[0])
 }
 
+// SetupAction is the next UI step after resolving a requested application.
+type SetupAction int
+
+const (
+	SetupNoMatch SetupAction = iota
+	SetupChooseApplication
+	SetupChooseWindow
+	SetupStartTarget
+)
+
+// SetupPlan is the shared decision used by the TUI and GUI so both choose the
+// same application/window for the same resolution.
+type SetupPlan struct {
+	Action      SetupAction
+	TargetIndex int
+	Matches     []int
+}
+
+// PlanApplicationSetup mirrors the TUI's established behavior: installed
+// applications first, then no-match, then a unique requested window, then the
+// window picker. The GUI previously had its own divergent rules.
+func PlanApplicationSetup(res ApplicationResolution, suggested string) SetupPlan {
+	if len(res.Applications) > 0 {
+		return SetupPlan{Action: SetupChooseApplication}
+	}
+	if len(res.Targets) == 0 {
+		return SetupPlan{Action: SetupNoMatch}
+	}
+	matches := MatchApplications(suggested, res.Targets)
+	if res.Matched {
+		matches = make([]int, len(res.Targets))
+		for i := range res.Targets {
+			matches[i] = i
+		}
+	}
+	if suggested != "" && len(matches) == 1 {
+		return SetupPlan{Action: SetupStartTarget, TargetIndex: matches[0]}
+	}
+	return SetupPlan{Action: SetupChooseWindow, Matches: matches}
+}
+
 func matchingApplicationWindows(ctx context.Context, finder ApplicationWindowLookup, app Application) ([]Target, error) {
 	if app.Identity == "" {
 		return nil, nil
