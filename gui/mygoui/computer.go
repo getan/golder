@@ -703,6 +703,9 @@ func (a *App) computerPanel(c *ui.Context) {
 			if a.computerFrameInfo.Width > 0 && a.computerFrameInfo.Height > 0 {
 				label += fmt.Sprintf(" · %dx%d", a.computerFrameInfo.Width, a.computerFrameInfo.Height)
 			}
+			if !a.computerFrameInfo.CapturedAt.IsZero() {
+				label += " · captured " + time.Since(a.computerFrameInfo.CapturedAt).Round(100*time.Millisecond).String() + " ago"
+			}
 			label += " · content changed " + age.String() + " ago"
 			color := t.TextMuted
 			if a.computerFrameInfo.VisibilityKnown && !a.computerFrameInfo.OnScreen {

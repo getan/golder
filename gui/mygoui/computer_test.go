@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -157,6 +158,24 @@ func TestComputerDrawerShowsTargetAndTakeover(t *testing.T) {
 	}
 	if err := tt.Click("Pause / take over"); err != nil || !session.Status().Paused {
 		t.Fatalf("pause failed: paused=%t err=%v", session.Status().Paused, err)
+	}
+}
+
+func TestComputerPanelReportsCaptureAge(t *testing.T) {
+	a := testApp()
+	session := computeruse.New(computerUIBackend{})
+	if err := session.Start(context.Background(), computeruse.Target{ID: "opaque", Application: "Calculator"}, computeruse.Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	a.computerSession, a.computerOpen = session, true
+	a.computerFrameInfo = computeruse.Frame{Width: 1200, Height: 800, Source: "stream", CapturedAt: time.Now()}
+	a.computerFrameChangedAt = time.Now()
+	tt := ui.NewTester(a.view, 1400, 800)
+	for _, want := range []string{"stream", "1200x800", "captured", "content changed"} {
+		if !tt.HasText(want) {
+			t.Fatalf("preview status is missing %q; texts=%q", want, tt.Texts())
+		}
 	}
 }
 

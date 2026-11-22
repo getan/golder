@@ -11,6 +11,11 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Computer Use
+- Show how long ago the preview was captured next to its capture path, pixel
+  grid and last content change, so a frozen capture is distinguishable from an
+  idle window.
+
 ### Windows desktop compatibility
 - Add a native File/Exit menu and guard shutdown while a Windows file picker is
   open. The Windows GUI packaging workflow exercises the menu and picker on a

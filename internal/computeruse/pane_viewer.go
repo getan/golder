@@ -451,7 +451,11 @@ func (d *operatorPaneDisplay) draw(out io.Writer, renderer *KittyRenderer, state
 		if state.frame.Width > 0 && state.frame.Height > 0 {
 			preview += fmt.Sprintf(" %dx%d", state.frame.Width, state.frame.Height)
 		}
-		header += " · " + preview + " · content changed " + time.Since(state.frameChangedAt).Round(time.Second).String() + " ago"
+		header += " · " + preview
+		if !state.frame.CapturedAt.IsZero() {
+			header += " · captured " + time.Since(state.frame.CapturedAt).Round(100*time.Millisecond).String() + " ago"
+		}
+		header += " · content changed " + time.Since(state.frameChangedAt).Round(time.Second).String() + " ago"
 		if state.frame.VisibilityKnown && !state.frame.OnScreen {
 			header += " · another desktop, may be stale"
 		}
