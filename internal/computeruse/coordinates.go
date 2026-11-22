@@ -185,6 +185,23 @@ type PointTypeBackend interface {
 	TypeAtFrame(context.Context, Target, string, float64, float64, string, bool) error
 }
 
+// PointHIDClickBackend performs one real HID click at a captured point after
+// briefly fronting the exact window; it is the fallback for Electron surfaces
+// that ignore synthetic per-pid clicks for navigation.
+type PointHIDClickBackend interface {
+	ClickHIDFrame(context.Context, Target, string, float64, float64) error
+}
+
+func (s *Session) ClickHIDFrame(ctx context.Context, frameID string, x, y float64) error {
+	return s.useFrame(ctx, frameID, x, y, true, func(ctx context.Context, backend FrameBoundBackend, target Target, lease frameLease) error {
+		point, ok := backend.(PointHIDClickBackend)
+		if !ok {
+			return noInputError(ErrUnavailable)
+		}
+		return point.ClickHIDFrame(ctx, target, lease.token, x, y)
+	})
+}
+
 // TypeAtFrame is the pixel-targeted text path. The frame lease binds the
 // target and geometry; the backend may bring the window forward briefly and
 // must restore the previous Space and frontmost application afterwards.

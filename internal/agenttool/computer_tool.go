@@ -91,12 +91,18 @@ func (t *ComputerTool) ValidationSchema() json.RawMessage {
 		return json.RawMessage(computerValidationSchema)
 	}
 	values, _ := action["enum"].([]any)
+	present := make(map[string]bool, len(values))
 	for _, value := range values {
-		if value == "type_at" {
-			return json.RawMessage(computerValidationSchema)
+		if name, ok := value.(string); ok {
+			present[name] = true
 		}
 	}
-	action["enum"] = append(values, "type_at")
+	for _, name := range []string{"type_at", "click_hid_at"} {
+		if !present[name] {
+			values = append(values, name)
+		}
+	}
+	action["enum"] = values
 	data, err := json.Marshal(doc)
 	if err != nil {
 		return json.RawMessage(computerValidationSchema)
@@ -134,6 +140,7 @@ func (t *ComputerTool) Schema() json.RawMessage {
 		}
 		if !status.Paused && control && t.Session.SupportsCoordinates() {
 			actions = append(actions, "click_at")
+			actions = append(actions, "click_hid_at")
 			actions = append(actions, "type_at")
 			for _, action := range []string{"press", "scroll", "type_text"} {
 				if t.Session.SupportsFrameAction(action) {
@@ -284,6 +291,20 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 			return computerControlError(t.Session, err), nil
 		}
 		return result(map[string]any{"typed": true, "submitted": submit, "delivery": "foreground", "restored": true})
+	case "click_hid_at":
+		if t.Mode != nil && t.Mode.Mode() == permissions.ReadOnly {
+			return errorResult("computer: read-only mode does not permit desktop control"), nil
+		}
+		if agentcore.SandboxRequestedFromContext(ctx) || seatbelt.ModeFromEnv() == seatbelt.ModeEnforce {
+			return errorResult("computer: desktop control cannot satisfy required OS containment"), nil
+		}
+		if args.SnapshotID != "" || args.Ref != "" || args.Key != "" || args.Text != "" || args.FrameID == "" || args.X == nil || args.Y == nil || args.DeltaX != 0 || args.DeltaY != 0 {
+			return errorResult("computer: click_hid_at requires frame_id, x and y"), nil
+		}
+		if err := t.Session.ClickHIDFrame(ctx, args.FrameID, *args.X, *args.Y); err != nil {
+			return computerControlError(t.Session, err), nil
+		}
+		return result(map[string]any{"clicked": true, "delivery": "foreground", "restored": true})
 	case "click", "click_at", "fill", "replace", "type_text", "press", "scroll", "close_window":
 		if t.Mode != nil && t.Mode.Mode() == permissions.ReadOnly {
 			return errorResult("computer: read-only mode does not permit desktop control"), nil

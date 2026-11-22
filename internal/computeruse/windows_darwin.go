@@ -1577,6 +1577,40 @@ int cu_type_at_frame(cu_window selected, AXUIElementRef expected, double bx, dou
 	return 1;
 }
 
+// Foreground HID click for Electron surfaces that ignore per-pid synthetic
+// clicks for navigation. The caller briefly activates the exact window and
+// restores the operator's home afterwards.
+int cu_hid_click_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, double nx, double ny, cu_cancel_flag *flag) {
+	if (!expected || cu_cancelled(flag) || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || bw <= 0 || bh <= 0) return 0;
+	if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return 0;
+	CGPoint point = CGPointMake(bx + nx*bw, by + ny*bh);
+	CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
+	if (!source) return 0;
+	CGEventRef move = CGEventCreateMouseEvent(source, kCGEventMouseMoved, point, kCGMouseButtonLeft);
+	CGEventRef down = CGEventCreateMouseEvent(source, kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
+	CGEventRef up = CGEventCreateMouseEvent(source, kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
+	if (!move || !down || !up) {
+		if (move) CFRelease(move);
+		if (down) CFRelease(down);
+		if (up) CFRelease(up);
+		CFRelease(source);
+		return 0;
+	}
+	CGEventSetIntegerValueField(down, kCGMouseEventClickState, 1);
+	CGEventSetIntegerValueField(up, kCGMouseEventClickState, 1);
+	CGEventPost(kCGHIDEventTap, move);
+	usleep(20000);
+	if (cu_cancelled(flag)) { CFRelease(move); CFRelease(down); CFRelease(up); CFRelease(source); return 0; }
+	CGEventPost(kCGHIDEventTap, down);
+	usleep(50000);
+	CGEventPost(kCGHIDEventTap, up);
+	CFRelease(move);
+	CFRelease(down);
+	CFRelease(up);
+	CFRelease(source);
+	return 1;
+}
+
 static int cu_ax_invoke(cu_window selected, AXUIElementRef expected, AXUIElementRef element, CFStringRef action, cu_cancel_flag *flag) {
 	if (!expected || !element || cu_cancelled(flag)) return 0;
 	// AXPress is addressed to the pinned element, not to the foreground app.
@@ -2766,6 +2800,45 @@ func (c *MacWindowCatalog) TypeAtFrame(ctx context.Context, target Target, token
 	}
 	err := c.sendFrame(ctx, target, binding, func(w C.cu_window, pinned C.AXUIElementRef, b macFrameBinding, flag *C.cu_cancel_flag) C.int {
 		return C.cu_type_at_frame(w, pinned, C.double(b.X), C.double(b.Y), C.double(b.W), C.double(b.H), C.double(x), C.double(y), value, C.size_t(len(text)), flag, 1, submitFlag)
+	})
+	c.restoreAfterForeground(previous, space)
+	return err
+}
+
+// ClickHIDFrame is the explicit foreground fallback: it briefly fronts the
+// exact window, posts a real HID click at the captured point, then restores the
+// operator's home Space and app.
+func (c *MacWindowCatalog) ClickHIDFrame(ctx context.Context, target Target, token string, x, y float64) error {
+	if err := c.Validate(ctx, target, false); err != nil {
+		return err
+	}
+	var binding macFrameBinding
+	if json.Unmarshal([]byte(token), &binding) != nil || binding.Target != target.ID || binding.W <= 0 || binding.H <= 0 {
+		return noInputError(ErrStaleObservation)
+	}
+	if x < 0 || y < 0 || x >= float64(binding.W) || y >= float64(binding.H) {
+		return noInputError(ErrNotAllowed)
+	}
+	c.mu.Lock()
+	window, ok := c.windows[target.ID]
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || !ok {
+		return noInputError(ErrTargetLost)
+	}
+	previous := C.cu_frontmost_pid()
+	space := C.cu_active_space()
+	if c.homeSpace != 0 {
+		space = c.homeSpace
+	}
+	if previous <= 0 || previous == C.int32_t(window.pid) {
+		previous = c.homePID
+	}
+	C.cu_activate_pid(C.int32_t(window.pid))
+	time.Sleep(350 * time.Millisecond)
+	nx, ny := x/float64(binding.W), y/float64(binding.H)
+	err := c.sendFrame(ctx, target, binding, func(w C.cu_window, pinned C.AXUIElementRef, b macFrameBinding, flag *C.cu_cancel_flag) C.int {
+		return C.cu_hid_click_frame(w, pinned, C.double(b.X), C.double(b.Y), C.double(b.W), C.double(b.H), C.double(nx), C.double(ny), flag)
 	})
 	c.restoreAfterForeground(previous, space)
 	return err
