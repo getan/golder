@@ -16,6 +16,13 @@ interactive REPL/TUI.
   open. The Windows GUI packaging workflow exercises the menu and picker on a
   real Windows runner; see [v1.5.70 notes](docs/releases/v1.5.70.md).
 
+## [1.5.130] - 2026-11-22
+
+### Computer Use
+- Report each frame's capture path (`stream`, `skylight`, `screenshot`) and pixel
+  grid in the screenshot result, the TUI pane header and the GUI preview line.
+  Diagnostic only: capture selection and refusal rules are unchanged.
+
 ## [1.5.129] - 2026-11-22
 
 ### Computer Use

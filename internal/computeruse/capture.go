@@ -61,6 +61,15 @@ type Frame struct {
 	CapturedAt      time.Time
 	OnScreen        bool
 	VisibilityKnown bool
+	// Source names the platform capture path that produced this frame, when the
+	// backend reports one. Diagnostic only: it never authorizes an action.
+	Source string
+}
+
+// FrameSourceReporter labels the capture path behind an opaque frame token.
+// It explains a frame; it never decides whether a frame may be used.
+type FrameSourceReporter interface {
+	CaptureSource(token string) string
 }
 
 // A backend that can report whether the captured window is on the current
@@ -147,6 +156,9 @@ func (s *Session) capture(ctx context.Context, preview bool) (Frame, error) {
 		}
 		frame = Frame{ID: hex.EncodeToString(nonce[:]), Width: cfg.Width, Height: cfg.Height, PNG: raw}
 		frame.CapturedAt = time.Now()
+		if reporter, ok := backend.(FrameSourceReporter); ok && token != "" {
+			frame.Source = reporter.CaptureSource(token)
+		}
 		if visibility, ok := backend.(WindowVisibility); ok {
 			if on, err := visibility.WindowOnScreen(ctx, target); err == nil {
 				frame.OnScreen, frame.VisibilityKnown = on, true

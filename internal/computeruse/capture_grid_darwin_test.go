@@ -5,6 +5,7 @@ package computeruse
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,23 @@ func TestGridChangeIsRefusedAsASourceChange(t *testing.T) {
 	}
 	if !errors.Is(err, ErrNoInput) || StaleCode(err) != "capture_source_changed" {
 		t.Fatalf("err = %v (code %q)", err, StaleCode(err))
+	}
+}
+
+func TestCaptureSourceReportsTheRecordedPath(t *testing.T) {
+	catalog := &MacWindowCatalog{}
+	token, err := json.Marshal(macFrameBinding{Target: "window", Source: captureSourceStream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := catalog.CaptureSource(string(token)); got != captureSourceStream {
+		t.Fatalf("source = %q", got)
+	}
+	if got := catalog.CaptureSource("not json"); got != "" {
+		t.Fatalf("malformed token source = %q", got)
+	}
+	if got := catalog.CaptureSource(strings.Repeat("x", maxFrameTokenBytes+1)); got != "" {
+		t.Fatalf("oversized token source = %q", got)
 	}
 }
 

@@ -444,7 +444,14 @@ func (d *operatorPaneDisplay) draw(out io.Writer, renderer *KittyRenderer, state
 	text.WriteString("\x1b[2J\x1b[H")
 	header := fmt.Sprintf("Computer Use · %s · %s / %s", status, paneText(state.status.Target.Application), paneText(state.status.Target.Window))
 	if state.frame != nil && !state.frameChangedAt.IsZero() {
-		header += " · preview changed " + time.Since(state.frameChangedAt).Round(time.Second).String() + " ago"
+		preview := "preview"
+		if state.frame.Source != "" {
+			preview += " " + state.frame.Source
+		}
+		if state.frame.Width > 0 && state.frame.Height > 0 {
+			preview += fmt.Sprintf(" %dx%d", state.frame.Width, state.frame.Height)
+		}
+		header += " · " + preview + " · content changed " + time.Since(state.frameChangedAt).Round(time.Second).String() + " ago"
 		if state.frame.VisibilityKnown && !state.frame.OnScreen {
 			header += " · another desktop, may be stale"
 		}

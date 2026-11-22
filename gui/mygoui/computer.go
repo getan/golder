@@ -506,7 +506,7 @@ func (a *App) startComputerPreview() {
 						if bitmap != nil {
 							a.computerFrame = bitmap
 						}
-						a.computerFrameInfo = computeruse.Frame{ID: frame.ID, Width: frame.Width, Height: frame.Height, CapturedAt: frame.CapturedAt, OnScreen: frame.OnScreen, VisibilityKnown: frame.VisibilityKnown}
+						a.computerFrameInfo = computeruse.Frame{ID: frame.ID, Width: frame.Width, Height: frame.Height, CapturedAt: frame.CapturedAt, OnScreen: frame.OnScreen, VisibilityKnown: frame.VisibilityKnown, Source: frame.Source}
 						a.computerFrameChangedAt = changedAt
 						a.computerError = ""
 					} else if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, computeruse.ErrPaused) && !errors.Is(err, computeruse.ErrPreviewBusy) {
@@ -696,7 +696,14 @@ func (a *App) computerPanel(c *ui.Context) {
 		})
 		if !a.computerFrameChangedAt.IsZero() {
 			age := time.Since(a.computerFrameChangedAt).Round(time.Second)
-			label := "Preview last changed " + age.String() + " ago"
+			label := "Preview"
+			if a.computerFrameInfo.Source != "" {
+				label += " · " + a.computerFrameInfo.Source
+			}
+			if a.computerFrameInfo.Width > 0 && a.computerFrameInfo.Height > 0 {
+				label += fmt.Sprintf(" · %dx%d", a.computerFrameInfo.Width, a.computerFrameInfo.Height)
+			}
+			label += " · content changed " + age.String() + " ago"
 			color := t.TextMuted
 			if a.computerFrameInfo.VisibilityKnown && !a.computerFrameInfo.OnScreen {
 				label += " · window is on another desktop; this image may be stale"

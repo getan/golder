@@ -2554,6 +2554,18 @@ func (c *MacWindowCatalog) CaptureBound(ctx context.Context, target Target) ([]b
 	return image, string(binding), nil
 }
 
+// CaptureSource reports which path produced a frame token. Diagnostic only.
+func (c *MacWindowCatalog) CaptureSource(token string) string {
+	if len(token) == 0 || len(token) > maxFrameTokenBytes {
+		return ""
+	}
+	var binding macFrameBinding
+	if json.Unmarshal([]byte(token), &binding) != nil {
+		return ""
+	}
+	return binding.Source
+}
+
 // preferBackingStore decides whether a window must be read from its backing
 // store instead of ScreenCaptureKit. A window off the current desktop always
 // must; a window already read that way stays there so its pixel grid does not
