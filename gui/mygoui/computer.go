@@ -181,7 +181,17 @@ func (a *App) applyComputerResolution(resolution computeruse.ApplicationResoluti
 	if resolution.NotFound {
 		a.computerError = "No installed application matched the requested name. Choose a window, or search again with the application's installed or localized name."
 	}
-	if a.computerSuggested == "" || !resolution.Matched {
+	if a.computerSuggested == "" {
+		return
+	}
+	if len(resolution.Targets) == 0 && len(resolution.Applications) == 1 {
+		// The requested app is installed but has no window yet; the TUI opens
+		// its application picker for this case, while the GUI previously fell
+		// through to an empty window list.
+		a.launchComputerApplication(0)
+		return
+	}
+	if !resolution.Matched {
 		return
 	}
 	if len(resolution.Targets) == 1 {

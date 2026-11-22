@@ -27,14 +27,6 @@ func (a *App) view(c *ui.Context) {
 	if !a.computerPickerOpen && a.computerCandidate != nil {
 		a.clearComputerCandidate()
 	}
-	if !a.computerPickerOpen && a.computerRequestPicker {
-		a.computerRequestPicker = false
-		a.computerSuggested = ""
-		if a.ctrl != nil {
-			a.ctrl.ResetComputerRequest()
-			a.resumeQueued()
-		}
-	}
 	if !a.computerPickerOpen && a.computerSetupStop != nil {
 		a.computerSetupStop()
 		a.computerSetupStop = nil
