@@ -227,7 +227,7 @@ func (a *App) startComputer(control bool) {
 	if setup == nil {
 		return
 	}
-	a.startComputerSetup(setup, computersetup.Grant{Control: control, SemanticOnly: a.computerSkipPreview})
+	a.startComputerSetup(setup, computersetup.Grant{Control: control, SemanticOnly: a.computerSkipPreview, SkipPreview: runtime.GOOS == "darwin"})
 }
 
 func (a *App) startComputerSetup(setup *computersetup.Setup, grant computersetup.Grant) {

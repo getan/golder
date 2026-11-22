@@ -11,6 +11,7 @@ package computersetup
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 
 	"github.com/getan/golder/internal/computeruse"
@@ -47,6 +48,9 @@ type Grant struct {
 	// SemanticOnly skips the operator preview whose confirmation proves a
 	// system-selected capture source. Backends without a preview gate ignore it.
 	SemanticOnly bool
+	// SkipPreview skips only the confirmation step, keeping capture and control.
+	// Used when the person explicitly chose the window on macOS.
+	SkipPreview bool
 }
 
 // View is the resolution state a frontend renders.
@@ -235,7 +239,7 @@ func (s *Setup) Target() (computeruse.Target, bool) {
 func (s *Setup) AutoGrant() Grant {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Grant{Control: true, SemanticOnly: s.previewGateLocked()}
+	return Grant{Control: true, SemanticOnly: s.previewGateLocked() && runtime.GOOS != "darwin", SkipPreview: runtime.GOOS == "darwin"}
 }
 
 // HasPreviewGate reports whether the backend asks for a system-selected
@@ -313,7 +317,7 @@ func (s *Setup) start(ctx context.Context, grant Grant, candidateID string) (*co
 	s.mu.Unlock()
 
 	var preview computeruse.OperatorPreview
-	if gate, ok := backend.(computeruse.OperatorPreviewBackend); ok && !grant.SemanticOnly {
+	if gate, ok := backend.(computeruse.OperatorPreviewBackend); ok && !grant.SemanticOnly && !grant.SkipPreview {
 		var err error
 		if candidateID != "" {
 			err = gate.ConfirmOperatorPreview(ctx, target, candidateID)

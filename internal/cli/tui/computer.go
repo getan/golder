@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -384,7 +385,8 @@ func (m Model) chooseComputerGrant(item string) (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, nil
 	}
-	previewPending := setup.HasPreviewGate() && !semanticOnly
+	skipPreview := runtime.GOOS == "darwin"
+	previewPending := setup.HasPreviewGate() && !semanticOnly && !skipPreview
 	cwd := m.session.cwd
 	m.menu.close()
 	m.transcript.addSystem("Opening the separate operator pane; a system-selected window may require local preview confirmation…")
@@ -392,7 +394,7 @@ func (m Model) chooseComputerGrant(item string) (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(setup.ctx, 2*time.Minute)
 		defer cancel()
-		session, err := setup.Start(ctx, computersetup.Grant{Control: control, SemanticOnly: semanticOnly})
+		session, err := setup.Start(ctx, computersetup.Grant{Control: control, SemanticOnly: semanticOnly, SkipPreview: skipPreview})
 		var handle *computeruse.PaneHandle
 		if err == nil {
 			handle, err = computeruse.LaunchOperatorPane(ctx, session, cwd)
