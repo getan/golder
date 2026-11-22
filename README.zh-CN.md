@@ -22,7 +22,7 @@ Golder 是用 Go 编写的开源 AI 编码助手，既有原生桌面应用、An
 2. **核心能力**：运行时组装上下文、请求所选模型、调用工具并继续对话；文件、Git、Shell、浏览器、Web、Android 构建/下载/安装与扩展工具，与会话历史、上下文压缩和记忆共同构成工作流。
 3. **权限与操作目标**：适用的工具调用经过审批、路径授权和 OS 沙箱，再访问项目文件、命令、浏览器、桌面窗口或 Android 安装包。Android 的 Keystore、前台服务和系统安装器是宿主能力，APK 由 GitHub Actions 产出。实际限制依平台和权限模式而异，不表示所有操作都无条件隔离。
 
-浏览器界面需要本机安装 Chromium；Computer Use 仍在开发中，需系统权限并由用户选择目标窗口。详见 [GUI 使用说明](gui/README.md)、[沙箱文档](docs/sandboxing.md)和 [Computer Use 当前状态](docs/computer-use.md)。
+浏览器界面需要本机安装 Chromium；Computer Use 已可用（macOS 为主要支持平台），需系统权限并由用户选择目标窗口。详见 [GUI 使用说明](gui/README.md)、[沙箱文档](docs/sandboxing.md)和 [Computer Use 当前状态](docs/computer-use.md)。
 
 ## 产品展示
 
@@ -152,7 +152,7 @@ workspace daemon（后台常驻，拥有 pane）
 
 ## 亮点
 
-- **原生桌面工作台**：Golder GUI 在一个应用里提供项目与会话导航、流式对话、diff 卡片、审批、文件与变更视图、浏览器界面和可选终端。Computer Use 正在开发，按平台限制操作用户选定的窗口。
+- **原生桌面工作台**：Golder GUI 在一个应用里提供项目与会话导航、流式对话、diff 卡片、审批、文件与变更视图、浏览器界面和可选终端。Computer Use 已可用，按平台限制操作用户选定的窗口。
 - **原生 Android 客户端**：Kotlin/Compose 通过 JNI 运行共享 Go Agent；Android 增加 Keystore 凭据、后台任务保活、结构化 Git、GitHub Actions APK 构建/下载，以及无需重新构建、直接打开系统安装器的 Install APK 操作。
 - **自带终端工作区**：`golder workspace` 一个面板里跑 agent、shell 和浏览器——左边 agent 改代码，右边 shell 跑测试，焦点即输入；`browser` 通过 kitty-browse 的控制 socket 操作页面（snapshot/click/fill/wait/console/network），`workspace` 预设（`debug-fullstack`、`data-analysis`、`review`）一次起好后端、前端和浏览器，再用 `snapshot` 把所有 pane 的上下文一次交给模型。`visual`（图表 / Mermaid / TML 面板）已下架，原因见 CHANGELOG 的 Removed 一节。
 - **多 Provider 热切换，会话不绑定厂商**：`/provider` 随时换网关，`/resume` 在当前 provider 上继续同一份上下文；内置 19 个会话网关，覆盖 OpenAI Chat / Responses、Anthropic Messages、Gemini 四种线上协议，也可指向任意兼容端点。

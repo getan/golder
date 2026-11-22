@@ -22,7 +22,7 @@ The diagram's labels are in Chinese; its layers are:
 2. **Agent capabilities:** the runtime assembles context, calls a configured model provider, executes tools and continues the conversation. File, Git, shell, browser, web, Android app control, Android build/download/install and extension tools sit alongside session history, compaction and memory.
 3. **Boundaries and targets:** approvals, path grants and OS sandboxing mediate applicable calls before they reach project files, commands, browsers, desktop windows or Android packages. On Android, Keystore, a foreground service and the system package installer are host services; GitHub Actions produces APKs. Controls vary by platform and permission mode, and are not an unconditional guarantee for every operation.
 
-The browser surface needs an installed Chromium; desktop Computer Use is under development and requires platform permissions and a user-selected target. See the [GUI guide](gui/README.md), [sandbox documentation](docs/sandboxing.md) and [Computer Use status](docs/computer-use.md) for details.
+The browser surface needs an installed Chromium; desktop Computer Use is available, with macOS as the primary supported platform, and requires platform permissions and a user-selected target. See the [GUI guide](gui/README.md), [sandbox documentation](docs/sandboxing.md) and [Computer Use status](docs/computer-use.md) for details.
 
 ## Product tour
 
@@ -146,7 +146,7 @@ workspace daemon (persistent, owns the panes)
 
 ## Highlights
 
-- **A native desktop workspace.** Golder GUI brings project and session navigation, streamed conversations, diff cards, approvals, file and change views, a browser surface and an optional terminal together in one app. Desktop Computer Use is in development and operates on a user-selected window with platform-specific restrictions.
+- **A native desktop workspace.** Golder GUI brings project and session navigation, streamed conversations, diff cards, approvals, file and change views, a browser surface and an optional terminal together in one app. Desktop Computer Use is available and operates on a user-selected window with platform-specific restrictions.
 - **A native Android client.** Kotlin/Compose runs the shared Go Agent over JNI. Android adds Keystore credentials, background task keep-alive, structured Git, GitHub Actions APK build/download, and an Install APK action that opens the system installer without rebuilding.
 - **A built-in terminal workspace.** `golder workspace` runs the agent, shell and browser in one panel — the agent patches while the shell runs tests, and focus is input. The agent can open its browser pane itself; presets (`debug-fullstack`, `data-analysis`, `review`) start a full-stack setup, and `snapshot` gives the model context from every pane. On macOS/Linux, no separate tuios or kitty-browse install is required.
 - **Hot-switch providers; the session outlives them.** `/provider` switches gateways at any time and `/resume` continues the same context on the new provider; 19 built-in conversation gateways cover OpenAI Chat / Responses, Anthropic Messages and Gemini, plus any compatible endpoint.
