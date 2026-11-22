@@ -214,7 +214,7 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 	switch args.Action {
 	case "status":
 		s := t.Session.Status()
-		status := map[string]any{"active": s.Active, "paused": s.Paused, "application": s.Target.Application, "window": s.Target.Window, "observe": s.Capabilities.Observe, "control": s.Capabilities.Control}
+		status := map[string]any{"active": s.Active, "paused": s.Paused, "application": s.Target.Application, "window": s.Target.Window, "observe": s.Capabilities.Observe, "control": s.Capabilities.Control, "pending_preview": s.PendingPreview, "diag": "control-gate-v2"}
 		if pid, space, ok := t.Session.HomeInfo(); ok {
 			status["home_pid"], status["home_space"] = pid, space
 		}

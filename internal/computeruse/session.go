@@ -211,11 +211,11 @@ func (s *Session) do(ctx context.Context, control, preview bool, operation func(
 	}
 	if s.operatorPreview != nil {
 		s.mu.Unlock()
-		return ErrNotAllowed
+		return fmt.Errorf("%w: control gate: operator preview pending", ErrNotAllowed)
 	}
 	if !s.status.Capabilities.Observe || (control && !s.status.Capabilities.Control) || operation == nil {
 		s.mu.Unlock()
-		return ErrNotAllowed
+		return fmt.Errorf("%w: control gate: observe=%v control_capability=%v requested_control=%v", ErrNotAllowed, s.status.Capabilities.Observe, s.status.Capabilities.Control, control)
 	}
 	if err := ctx.Err(); err != nil {
 		s.mu.Unlock()
