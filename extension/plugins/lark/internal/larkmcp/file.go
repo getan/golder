@@ -84,15 +84,14 @@ func validateFileArgs(args []string) error {
 				return fmt.Errorf("--%s is a configuration or credential flag and is not exposed", key)
 			}
 		}
-		fileFlag := false
-		for _, name := range []string{"file", "path", "output", "dir", "image", "audio", "video", "attachment", "media"} {
-			if strings.Contains(key, name) {
-				fileFlag = true
-				break
-			}
-		}
-		if fileFlag && !strings.Contains(value, "{file}") {
+		if localPathFlag(key) && !strings.Contains(value, "{file}") {
 			return fmt.Errorf("--%s must use the {file} placeholder", key)
+		}
+		if remoteResourceFlag(key) {
+			if value == "" || !validRemoteIdentifier(value, strings.HasSuffix(key, "s")) {
+				return fmt.Errorf("--%s must be an inline remote identifier, not a local file, URL or stdin reference", key)
+			}
+			continue
 		}
 		if !strings.Contains(value, "{file}") {
 			if strings.HasPrefix(strings.TrimSpace(value), "@") || value == "-" || strings.ContainsAny(value, "\x00\r\n") {
@@ -106,6 +105,63 @@ func validateFileArgs(args []string) error {
 		}
 	}
 	return nil
+}
+
+func flagSegments(key string) []string {
+	return strings.FieldsFunc(strings.ToLower(key), func(r rune) bool { return r == '-' || r == '_' })
+}
+
+// remoteResourceFlag reports whether a flag carries an object identifier from
+// the Lark server (--file-key, --image-key, --file-token) rather than a local
+// path. The last name segment decides, so --file-key is a remote key while
+// --key-file remains a local file parameter.
+func remoteResourceFlag(key string) bool {
+	segments := flagSegments(key)
+	if len(segments) == 0 {
+		return false
+	}
+	switch segments[len(segments)-1] {
+	case "key", "keys", "token", "tokens", "id", "ids", "uuid", "uuids", "code", "codes":
+		return true
+	}
+	return false
+}
+
+// validRemoteIdentifier accepts an inline server-side identifier such as
+// file_v3_… or om_…, and rejects anything that looks like a local path, a URL or
+// a stdin/@file reference. Remote identifiers never contain path separators.
+func validRemoteIdentifier(value string, list bool) bool {
+	if !validResourceValue(value, list) {
+		return false
+	}
+	parts := []string{value}
+	if list {
+		parts = strings.Split(value, ",")
+	}
+	for _, part := range parts {
+		token := strings.TrimSpace(part)
+		if token == "" || token == "." || token == ".." || strings.ContainsAny(token, `/\`) || strings.HasPrefix(token, "~") {
+			return false
+		}
+	}
+	return true
+}
+
+// localPathFlag reports whether a flag names a local filesystem path. Whole name
+// segments are classified instead of raw substrings, so a remote identifier such
+// as --file-key is not mistaken for the local --file or --output.
+func localPathFlag(key string) bool {
+	if remoteResourceFlag(key) {
+		return false
+	}
+	for _, segment := range flagSegments(key) {
+		for _, token := range []string{"file", "path", "output", "dir", "image", "audio", "video", "attachment", "media"} {
+			if strings.Contains(segment, token) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func resolveTransferPath(raw string, upload bool) (string, error) {

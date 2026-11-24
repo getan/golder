@@ -11,6 +11,14 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Lark extension
+- Treat remote resource identifiers such as `--file-key`, `--file-token` and
+  `--image-key` as identifiers rather than local paths, so chat attachment
+  downloads (`im +messages-resources-download --file-key … --output {file}`)
+  pass the file adapter. Local parameters such as `--file`, `--output` and
+  `--key-file` still require the `{file}` placeholder, and `@file`, stdin,
+  workspace escapes and remote keys that look like paths remain rejected.
+
 ### Windows desktop compatibility
 - Add a native File/Exit menu and guard shutdown while a Windows file picker is
   open. The Windows GUI packaging workflow exercises the menu and picker on a

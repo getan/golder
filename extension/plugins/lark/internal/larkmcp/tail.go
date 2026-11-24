@@ -207,7 +207,15 @@ func resourceTokenFlag(key string) bool {
 }
 
 func blockedFlagKey(key string) bool {
-	for _, blocked := range []string{"file", "path", "output", "secret", "credential", "header", "endpoint", "host", "profile", "browser", "config", "proxy", "debug", "verbose", "stdin", "image", "audio", "video", "attachment", "media"} {
+	for _, blocked := range []string{"secret", "credential", "header", "endpoint", "host", "profile", "browser", "config", "proxy", "debug", "verbose", "stdin"} {
+		if strings.Contains(key, blocked) {
+			return true
+		}
+	}
+	if remoteResourceFlag(key) {
+		return false
+	}
+	for _, blocked := range []string{"file", "path", "output", "image", "audio", "video", "attachment", "media"} {
 		if strings.Contains(key, blocked) {
 			return true
 		}
