@@ -191,7 +191,7 @@ func TestLarkHelperGateBlocksStableBuildsAndWarnsOnDev(t *testing.T) {
 	if m.mcpWizard != nil {
 		t.Fatal("a stale helper reached the approval dialog")
 	}
-	if !strings.Contains(m.View().Content, "differs from 1.5.69") || !strings.Contains(m.View().Content, "update it first") {
+	if !strings.Contains(m.View().Content, "differs from "+extensions.LarkHelperVersion()) || !strings.Contains(m.View().Content, "update it first") {
 		t.Fatalf("block message missing: %s", m.View().Content)
 	}
 
