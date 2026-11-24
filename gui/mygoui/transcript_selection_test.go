@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/getan/golder/gui/appsession"
@@ -339,15 +340,62 @@ func TestTranscriptWindowReachesRowsOfDifferentHeights(t *testing.T) {
 	}
 }
 
-func TestTranscriptWindowMeasurementOnlyAdjustsKnownHeights(t *testing.T) {
+func TestTranscriptWindowAnchorsRowsAboveTheViewport(t *testing.T) {
 	s := &transcriptWindow{}
 	s.sync([]transcriptRow{{key: "before"}, {key: "anchor"}}, false)
-	s.started, s.first, s.scroll.Y = true, 1, 1000
-	if !s.measure(0, 20) || s.scroll.Y != 1000 {
-		t.Fatalf("first measurement moved scroll: %v", s.scroll.Y)
+	s.started, s.follow, s.first, s.scroll.Y = true, false, 1, 1000
+	s.anchorKey, s.anchorOffset, s.anchorValid = s.keys[1], 1000-s.prefix(1), true
+	if !s.measure(0, 20) || s.scroll.Y != 948 {
+		t.Fatalf("first measurement did not preserve the anchor: %v", s.scroll.Y)
 	}
-	if !s.measure(0, 40) || s.scroll.Y != 1020 {
-		t.Fatalf("resize of measured row did not preserve anchor: %v", s.scroll.Y)
+	if !s.measure(0, 40) || s.scroll.Y != 968 {
+		t.Fatalf("resize of a measured row did not preserve the anchor: %v", s.scroll.Y)
+	}
+}
+
+func TestTranscriptWindowSelectionSkipsFirstMeasurementAnchor(t *testing.T) {
+	s := &transcriptWindow{}
+	s.sync([]transcriptRow{{key: "before"}, {key: "anchor"}}, false)
+	s.started, s.follow, s.first, s.scroll.Y = true, false, 1, 1000
+	s.anchorKey, s.anchorOffset, s.anchorValid = s.keys[1], 1000-s.prefix(1), true
+	s.selecting = true
+	if !s.measure(0, 20) || s.scroll.Y != 1000 {
+		t.Fatalf("selection dragged the anchor during first measurement: %v", s.scroll.Y)
+	}
+}
+
+func TestTranscriptFirstScrollAfterHistoryKeepsVisibleRowStable(t *testing.T) {
+	a := testApp()
+	a.status.SessionID = "history"
+	for i := range 400 {
+		a.items = append(a.items, appsession.Item{
+			ID: fmt.Sprintf("history-%03d", i), Kind: appsession.ItemAssistant,
+			Text: fmt.Sprintf("History row %03d\n\nsecond line", i), Done: true,
+		})
+	}
+	a.list = nil
+	a.transcriptRowsDirty = true
+	tt := ui.NewTester(a.view, 1200, 600)
+	tt.Frame()
+
+	tt.Wheel(700, 250, 0, -300)
+	tt.Advance(300 * time.Millisecond)
+	tt.Frame()
+	if a.list.first < 1 {
+		t.Fatalf("first scroll did not move into history: %d", a.list.first)
+	}
+	key := fmt.Sprintf("History row %03d", a.list.first+1)
+	before, ok := tt.Find(key)
+	if !ok {
+		t.Fatalf("missing %q after first scroll", key)
+	}
+	tt.Frame()
+	after, ok := tt.Find(key)
+	if !ok {
+		t.Fatalf("missing %q after settling", key)
+	}
+	if after.Y-before.Y > 1 || after.Y-before.Y < -1 {
+		t.Fatalf("first scroll kept moving after settling: %q %v -> %v", key, before.Y, after.Y)
 	}
 }
 

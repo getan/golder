@@ -39,6 +39,10 @@ type transcriptWindow struct {
 	followSelection bool
 	unseen          int
 	remeasure       bool
+	anchorKey       string
+	anchorOffset    float64
+	anchorValid     bool
+	selecting       bool
 	first           int
 	last            int
 	builtLo         int
@@ -142,7 +146,12 @@ func (s *transcriptWindow) jumpToBottom() {
 }
 
 func (s *transcriptWindow) handleScrollInput(ev ui.InputEvent) bool {
-	if ev.Kind == ui.InputScroll {
+	switch ev.Kind {
+	case ui.InputPointerDown:
+		s.selecting = true
+	case ui.InputPointerUp:
+		s.selecting = false
+	case ui.InputScroll:
 		if ev.DY < 0 && s.scroll.MaxY > 0 && s.scroll.Y > 0 {
 			s.follow, s.jumpPending, s.followSelection = false, false, false
 			s.upScrollPending = true
@@ -162,9 +171,8 @@ func (s *transcriptWindow) sync(rows []transcriptRow, waiting bool) {
 		return
 	}
 	s.remeasure = true
-	var anchor string
-	var offset float64
-	if s.started && s.first >= 0 && s.first < len(s.keys) {
+	anchor, offset := s.anchorKey, s.anchorOffset
+	if !s.anchorValid && s.started && s.first >= 0 && s.first < len(s.keys) {
 		anchor = s.keys[s.first]
 		offset = float64(s.scroll.Y) - s.prefix(s.first)
 	}
@@ -209,6 +217,8 @@ func (s *transcriptWindow) sync(rows []transcriptRow, waiting bool) {
 	if anchor != "" && !s.follow {
 		if i, ok := s.index[anchor]; ok {
 			s.scroll.Y = float32(max(s.prefix(i)+offset, 0))
+		} else {
+			s.anchorValid = false
 		}
 	}
 	if s.pinned {
@@ -264,11 +274,15 @@ func (s *transcriptWindow) measure(i int, h float32) bool {
 	for j := i + 1; j < len(s.tree); j += j & -j {
 		s.tree[j] += delta
 	}
-	// The first measurement replaces an estimate for a row already laid out
-	// at its real height. Correcting the scroll offset for that difference
-	// applies the change twice and moves the text under an active drag.
-	if known && s.started && !s.follow && i < s.first {
-		s.scroll.Y = max(s.scroll.Y+float32(delta), 0)
+	// Scroll anchoring: keep the top visible row where it is when a row above
+	// it changes height, including the first time that row is measured. Rows at
+	// or below the anchor move the content below themselves, which is expected.
+	// The first measurement under a pointer-held selection is left to the native
+	// selection; later corrections and ordinary scrolling keep the anchor.
+	if s.anchorValid && !s.follow && (!s.selecting || known) {
+		if anchor, ok := s.index[s.anchorKey]; ok && i < anchor {
+			s.scroll.Y = max(s.scroll.Y+float32(delta), 0)
+		}
 	}
 	return true
 }
@@ -351,6 +365,14 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 	}
 	if i, ok := s.index[s.focusKey]; ok {
 		ranges = append(ranges, transcriptRange{i, i + 1})
+	}
+	if s.follow || n == 0 {
+		s.anchorValid = false
+	} else if !s.selecting {
+		anchor := min(max(s.first, 0), n-1)
+		s.anchorKey = s.keys[anchor]
+		s.anchorOffset = float64(min(s.scroll.Y, s.scroll.MaxY)) - s.prefix(anchor)
+		s.anchorValid = true
 	}
 	slices.SortFunc(ranges, func(a, b transcriptRange) int { return a.lo - b.lo })
 	merged := ranges[:0]
