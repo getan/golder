@@ -50,7 +50,8 @@ func TestLarkReleaseVersionIndependentFromHost(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if release.Version != larkversion.Version || release.Archive != "golder-lark_"+host+"_darwin_arm64.tar.gz" || !strings.Contains(release.ArchiveURL, "/v"+host+"/") {
+		want := "golder-lark_" + host + "_helper" + larkversion.Version + "_darwin_arm64.tar.gz"
+		if release.Version != larkversion.Version || release.Archive != want || !strings.Contains(release.ArchiveURL, "/v"+host+"/") {
 			t.Fatalf("host %s resolved to %+v", host, release)
 		}
 	}

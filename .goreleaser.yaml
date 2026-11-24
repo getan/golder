@@ -95,7 +95,11 @@ archives:
   - id: golder-lark
     ids:
       - golder-lark
-    name_template: "golder-lark_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # The host tag alone cannot tell which helper bytes an asset contains: the
+    # helper is versioned independently. The release workflow exports
+    # LARK_HELPER_VERSION from extension/plugins/lark/version/version.go before
+    # running goreleaser; keep this name in sync with internal/extensions/lark_release.go.
+    name_template: "golder-lark_{{ .Version }}_helper{{ .Env.LARK_HELPER_VERSION }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
       - extension/plugins/lark/README.md

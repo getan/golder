@@ -35,6 +35,18 @@ jobs:
             exit 1
           fi
 
+      # The helper has its own version, so the asset name carries both the host
+      # tag and the helper version. internal/extensions/lark_release.go builds
+      # the same name when it downloads the archive.
+      - name: Read the Lark helper version
+        run: |
+          helper=$(sed -n 's/^const Version = "\([^"]*\)"$/\1/p' extension/plugins/lark/version/version.go)
+          if [ -z "$helper" ]; then
+            echo "::error::cannot read the Lark helper version from extension/plugins/lark/version/version.go"
+            exit 1
+          fi
+          echo "LARK_HELPER_VERSION=$helper" >> "$GITHUB_ENV"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:

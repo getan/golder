@@ -42,7 +42,9 @@ func larkRelease(version, goos, goarch, base string) (LarkRelease, error) {
 		return LarkRelease{}, errors.New("the matching Lark helper is unavailable on this platform")
 	}
 	// Artifacts live in the host release; their package version is independent.
-	archive := fmt.Sprintf("golder-lark_%s_%s_%s.tar.gz", version, goos, goarch)
+	// The asset name carries both versions so the download list shows which
+	// helper a host release contains; .goreleaser.yaml uses the same template.
+	archive := fmt.Sprintf("golder-lark_%s_helper%s_%s_%s.tar.gz", version, larkversion.Version, goos, goarch)
 	release := strings.TrimRight(base, "/") + "/v" + version
 	return LarkRelease{Version: larkversion.Version, Archive: archive, ArchiveURL: release + "/" + archive, ChecksumURL: release + "/checksums.txt"}, nil
 }

@@ -14,6 +14,10 @@ interactive REPL/TUI.
 ### Lark extension
 - Bump the bundled `golder-lark` helper to 1.5.70 so the `--file-key` fix and
   the helper lifecycle changes ship as one independently versioned package.
+- Name helper release assets `golder-lark_<host>_helper<helper>_<os>_<arch>.tar.gz`
+  so the releases page shows the independent helper version. The downloader and
+  goreleaser template stay in sync; the release workflow reads the version from
+  `extension/plugins/lark/version/version.go`.
 - Let TUI users replace the managed `golder-lark` helper without removing and
   re-adding the source. The Lark detail page shows the active helper version and,
   when the running Golder expects a different one, an explicit
