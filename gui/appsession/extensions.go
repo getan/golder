@@ -334,8 +334,7 @@ func (c *Controller) UpdateLarkPackage(ctx context.Context, source, checksum, ve
 		return err
 	}
 	defer release()
-	current, err := manager.Config(larkSourceRef)
-	if err != nil {
+	if _, err := manager.Config(larkSourceRef); err != nil {
 		return errors.New("configure Lark before updating its helper")
 	}
 	pkg, err := extensions.InstallManagedPackage(extensions.PackageInstallOptions{
@@ -347,11 +346,7 @@ func (c *Controller) UpdateLarkPackage(ctx context.Context, source, checksum, ve
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	updated, err := larkSourceConfigFromExisting(pkg, current)
-	if err != nil {
-		return err
-	}
-	return manager.ReplaceSourceConfig(larkSourceRef, updated)
+	return extensions.RebindLarkSource(manager, pkg)
 }
 
 // ConfigureLark stores a new App Secret by name, writes a disabled source, then
@@ -552,15 +547,6 @@ func managedExtensionVersion(version string) string {
 		return "dev"
 	}
 	return larkversion.Version
-}
-
-func larkSourceConfigFromExisting(pkg extensions.ManagedPackage, current extensions.SourceConfig) (extensions.SourceConfig, error) {
-	credential := credentialReferenceName(current.Env["LARK_MCP_APP_SECRET"])
-	return extensions.LarkSourceConfig(extensions.LarkSourceOptions{
-		Package: pkg, LarkCLI: current.Env["LARK_MCP_CLI"], ProjectCLI: current.Env["LARK_MCP_PROJECT_CLI"],
-		AppID: current.Env["LARK_MCP_APP_ID"], AppSecretCredential: credential,
-		Domains: splitCSV(current.Env["LARK_MCP_DOMAINS"]), ProjectHost: current.Env["MEEGLE_HOST"],
-	})
 }
 
 func (c *Controller) requireMatchingLarkHelper() error {

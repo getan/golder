@@ -25,6 +25,13 @@ type Response struct {
 	Prompt string
 }
 
+// Seams keep the admin Lark helper update testable without network access.
+var (
+	installLarkRelease = extensions.InstallLarkRelease
+	rebindLarkSource   = extensions.RebindLarkSource
+	larkReleaseFor     = extensions.LarkReleaseFor
+)
+
 func RenderList(m *extensions.Manager, kind string) string {
 	m.RefreshLiveState()
 	var b strings.Builder
@@ -255,9 +262,16 @@ func contains(args []string, v string) bool {
 	return false
 }
 
-// Run handles standalone administration. --yes is explicit operator consent,
-// not a model-controlled permission. No commands here call business tools.
+// Run handles standalone administration without a build version; update-helper
+// needs one, so the CLI entry point calls RunVersion.
 func Run(kind string, args []string, in io.Reader, out, errOut io.Writer) int {
+	return RunVersion(kind, "", args, in, out, errOut)
+}
+
+// RunVersion handles standalone administration. --yes is explicit operator
+// consent, not a model-controlled permission. No commands here call business
+// tools.
+func RunVersion(kind, version string, args []string, in io.Reader, out, errOut io.Writer) int {
 	jsonOutput := contains(args, "--json")
 	fail := func(err error) int {
 		if jsonOutput {
@@ -289,6 +303,7 @@ func Run(kind string, args []string, in io.Reader, out, errOut io.Writer) int {
 				if kind == "mcp" {
 					fmt.Fprintln(out, "  add <id> --transport stdio -- <program> [args...]")
 					fmt.Fprintln(out, "  add <id> --transport http --url <url>")
+					fmt.Fprintln(out, "  update-helper lark --yes   install the matching golder-lark and require review")
 				} else {
 					fmt.Fprintln(out, "  add <manifest-or-executable> [--id <id>]")
 				}
@@ -376,10 +391,49 @@ func Run(kind string, args []string, in io.Reader, out, errOut io.Writer) int {
 		}
 		return 0
 	}
+	if op == "update-helper" {
+		if kind != "mcp" || len(pos) < 2 || pos[1] != "lark" {
+			return fail(errors.New("update-helper is only available for mcp lark"))
+		}
+		release, e := larkReleaseFor(version)
+		if e != nil {
+			return fail(e)
+		}
+		if !yes {
+			fmt.Fprintf(errOut, "Install golder-lark %s from %s, then disable the Lark source for review? Type yes to continue:\n", release.Version, release.ArchiveURL)
+			line, _ := bufio.NewReader(in).ReadString('\n')
+			if strings.TrimSpace(line) != "yes" {
+				return fail(errors.New("update not confirmed"))
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		pkg, e := installLarkRelease(ctx, version)
+		if e == nil {
+			e = rebindLarkSource(m, pkg)
+		}
+		if e != nil {
+			return fail(e)
+		}
+		if j {
+			_ = json.NewEncoder(out).Encode(map[string]string{"helper": pkg.Version, "status": "installed; source disabled for review"})
+		} else {
+			fmt.Fprintln(out, "Lark helper", pkg.Version, "installed; source disabled — review and enable it again")
+		}
+		return 0
+	}
 	if len(pos) < 2 {
 		return fail(errors.New("action requires a source id"))
 	}
 	ref := extensions.SourceRef{Kind: kind, ID: pos[1]}
+	if kind == "mcp" && ref.ID == "lark" && (op == "enable" || op == "setup" || op == "test" || op == "connect") {
+		if active, ok := extensions.LarkActiveHelperVersion(m); ok && active != extensions.LarkHelperVersion() {
+			if _, err := larkReleaseFor(version); err == nil {
+				return fail(fmt.Errorf("Lark helper %s does not match this build's %s; run: golder mcp update-helper lark --yes", active, extensions.LarkHelperVersion()))
+			}
+			fmt.Fprintf(errOut, "golder: warning: Lark helper %s differs from this build's %s; no installable release is available\n", active, extensions.LarkHelperVersion())
+		}
+	}
 	if op == "enable" || op == "disable" || op == "remove" {
 		if kind == "mcp" {
 			reviewed, e := m.PrepareMCPEdit(ref.ID)

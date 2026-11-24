@@ -12,6 +12,24 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Lark extension
+- Let TUI users replace the managed `golder-lark` helper without removing and
+  re-adding the source. The Lark detail page shows the active helper version and,
+  when the running Golder expects a different one, an explicit
+  “Update helper…” entry. The confirmation page names the target version, the
+  download URL and the `checksums.txt` verification, and states that the source
+  will be disabled. The helper is installed and verified before the source is
+  rebound; a failed download leaves the existing helper and approved source
+  untouched, and Retry is offered. The replacement is never enabled
+  automatically. GUI and TUI now share `extensions.RebindLarkSource`.
+- Gate Lark approval, authorization and connection tests on the helper version.
+  TUI refuses when the active managed helper differs from the version this build
+  expects and a matching release exists, pointing at the update entry; a dev
+  build or an unavailable release only warns, so Lark is never locked out with
+  nothing to update to. The same gate applies to `golder mcp enable|setup|test`.
+- Add `golder mcp update-helper lark --yes`: install the matching
+  `golder-lark` release, verify it, rebind the source disabled and ask for
+  review. Without `--yes` it prints the version and URL and requires typing
+  `yes`.
 - Treat remote resource identifiers such as `--file-key`, `--file-token` and
   `--image-key` as identifiers rather than local paths, so chat attachment
   downloads (`im +messages-resources-download --file-key … --output {file}`)

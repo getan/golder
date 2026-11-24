@@ -144,6 +144,7 @@ type Model struct {
 	mcpOAuthEpoch       uint64
 	larkWizard          *larkSetupWizard // transient operator input; may contain credentials
 	mcpRemoval          *extensions.MCPEdit
+	larkUpdate          *larkHelperUpdate
 
 	// steerQ is the mid-run input queue: messages submitted while a run is in
 	// flight wait here and the run loop's steering seams deliver them (after
@@ -1110,6 +1111,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.finishMCPAuthorization(msg)
 	case larkWizardDoneMsg:
 		return m.finishLarkWizardOperation(msg)
+	case larkHelperDoneMsg:
+		return m.finishLarkHelperUpdate(msg)
 	case computerRequestedMsg:
 		if m.running && !m.sideRun && m.session != nil && m.session.header.ID == msg.sessionID {
 			m.computerSuggested = msg.application
@@ -2002,7 +2005,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// gate); when idle it is echoed as a user block and run — as a slash command
 		// if it starts with "/", else a normal prompt.
 		text := strings.TrimSpace(msg.text)
-		privateOperation := m.mcpWizard != nil || m.larkWizard != nil || m.mcpRemoval != nil || m.extensionSetupText != ""
+		privateOperation := m.mcpWizard != nil || m.larkWizard != nil || m.mcpRemoval != nil || m.larkUpdate != nil || m.extensionSetupText != ""
 		if m.running || privateOperation || text == "" {
 			if text != "" {
 				if m.running {

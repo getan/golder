@@ -273,6 +273,18 @@ func (m Model) extensionDetailPage(ref extensions.SourceRef, page string, drill 
 			info = withLarkProbeInfo(info, m.larkProbeStatus)
 		}
 		cfg, cfgErr := m.opts.Extensions.Config(ref)
+		var larkHelper larkHelperInfo
+		hasLarkHelper := false
+		if ref.Kind == "mcp" && ref.ID == "lark" && cfgErr == nil {
+			if helper, ok := m.larkHelperInfo(cfg); ok {
+				larkHelper, hasLarkHelper = helper, true
+				value := helper.ActiveVersion
+				if helper.UpdateAvailable {
+					value += " · " + helper.ExpectedVersion + " available"
+				}
+				info = append(info, pickInfoLine{Label: "Helper", Value: value})
+			}
+		}
 		var rows []pickItem
 		add := func(title, op string) {
 			rows = append(rows, pickItem{Title: title, Value: extensionValue("action", ref.Kind, op, ref.ID), Info: info})
@@ -310,6 +322,9 @@ func (m Model) extensionDetailPage(ref extensions.SourceRef, page string, drill 
 			rows = append(rows, pickItem{Title: "Disable and save", Value: extensionValue("action", ref.Kind, "disable", ref.ID, "--save"), Info: info})
 		default:
 			add("Browse tools", "tools")
+			if hasLarkHelper && larkHelper.UpdateAvailable {
+				rows = append(rows, pickItem{Title: fmt.Sprintf("Update helper %s → %s…", larkHelper.ActiveVersion, larkHelper.ExpectedVersion), Value: extensionValue("lark-helper-update"), Info: info})
+			}
 			if strings.Contains(s.Type, "legacy") {
 				rows = append(rows, pickItem{Title: fmt.Sprintf("Commands: %d (not directly executed) · events: %s (metadata only)", len(s.Commands), strings.Join(s.Events, ", ")), Heading: true})
 			}
@@ -373,6 +388,10 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		}
 	case "lark-setup":
 		return m.beginLarkWizard()
+	case "lark-helper-update":
+		return m.confirmLarkHelperUpdate()
+	case "lark-helper-confirm":
+		return m.updateLarkHelperConfirmed()
 	case "mcp-edit":
 		if len(v) == 2 {
 			return m.beginMCPEdit(v[1])
@@ -385,11 +404,13 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		return m.removeConfirmedMCP()
 	case "close":
 		m.mcpRemoval = nil
+		m.cancelLarkUpdate()
 		m.menu.close()
 		m.relayout()
 		return m, nil
 	case "back":
 		m.mcpRemoval = nil
+		m.cancelLarkUpdate()
 		if m.menu.popPicker() {
 			m.relayout()
 			return m, nil
@@ -400,14 +421,17 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		}
 		return m.openExtensions(kind)
 	case "detail":
+		m.cancelLarkUpdate()
 		if len(v) == 3 {
 			return m.extensionDetailPage(extensions.SourceRef{Kind: v[1], ID: v[2]}, "", true)
 		}
 	case "detail-return":
+		m.cancelLarkUpdate()
 		if len(v) == 3 {
 			return m.extensionDetailPage(extensions.SourceRef{Kind: v[1], ID: v[2]}, "", false)
 		}
 	case "detail-page":
+		m.cancelLarkUpdate()
 		if len(v) == 4 {
 			return m.extensionDetailPage(extensions.SourceRef{Kind: v[1], ID: v[2]}, v[3], true)
 		}
@@ -445,6 +469,17 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		ref := extensions.SourceRef{Kind: v[1], ID: v[2]}
+		if ref.Kind == "mcp" && ref.ID == "lark" {
+			allow, message := m.larkHelperGate()
+			if message != "" {
+				m.transcript.addSystem(message)
+			}
+			if !allow {
+				m.menu.close()
+				m.relayout()
+				return m, nil
+			}
+		}
 		if ref.Kind == "mcp" {
 			return m.beginMCPApproval(ref.ID)
 		}
@@ -467,6 +502,17 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "action":
 		if len(v) >= 4 {
+			if v[1] == "mcp" && v[3] == "lark" && (v[2] == "setup" || v[2] == "connect") {
+				allow, message := m.larkHelperGate()
+				if message != "" {
+					m.transcript.addSystem(message)
+				}
+				if !allow {
+					m.menu.close()
+					m.relayout()
+					return m, nil
+				}
+			}
 			return m.runExtension(v[1], v[2:])
 		}
 	case "confirm-reset":

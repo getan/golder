@@ -258,7 +258,7 @@ func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "extensions", "plugin", "mcp":
-			exit(extensioncmd.Run(os.Args[1], os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+			exit(extensioncmd.RunVersion(os.Args[1], version, os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 			return
 		case "workspace":
 			diagtrace.Event("main", "mode workspace")

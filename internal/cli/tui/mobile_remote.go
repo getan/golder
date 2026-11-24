@@ -174,7 +174,7 @@ outer:
 		view.ToolCallID = m.approval.remoteCallID
 		out.Approvals = append(out.Approvals, view)
 	}
-	private := m.mcpWizard != nil || m.mcpOAuth != nil || m.larkWizard != nil || m.mcpRemoval != nil || m.extensionSetupText != ""
+	private := m.mcpWizard != nil || m.mcpOAuth != nil || m.larkWizard != nil || m.mcpRemoval != nil || m.larkUpdate != nil || m.extensionSetupText != ""
 	return out, private
 }
 
