@@ -15,8 +15,10 @@ interactive REPL/TUI.
 - Keep the transcript's top visible row anchored while rows above it are
   measured, including their first measurement. The first scroll in a historical
   session no longer shifts the content by the difference between estimated and
-  real row heights. A pointer-held text selection still leaves its first
-  measurement to the native selection, and later scroll corrections continue.
+  real row heights. A zero-height marker and `ScrollIntoView` apply the anchor
+  after layout but before paint, so the correction does not wait for the next
+  frame. A pointer-held text selection still leaves its first measurement to the
+  native selection, and later scroll corrections continue.
 
 ### Lark extension
 - Bump the bundled `golder-lark` helper to 1.5.70 so the `--file-key` fix and

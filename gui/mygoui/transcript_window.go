@@ -42,6 +42,7 @@ type transcriptWindow struct {
 	anchorKey       string
 	anchorOffset    float64
 	anchorValid     bool
+	anchorReveal    bool
 	selecting       bool
 	first           int
 	last            int
@@ -142,6 +143,7 @@ func (s *transcriptWindow) jumpToBottom() {
 	s.upScrollPending = false
 	s.unseen = 0
 	s.hasReveal = false
+	s.anchorReveal = false
 	s.scroll.Y = math.MaxFloat32
 }
 
@@ -175,6 +177,12 @@ func (s *transcriptWindow) sync(rows []transcriptRow, waiting bool) {
 	if !s.anchorValid && s.started && s.first >= 0 && s.first < len(s.keys) {
 		anchor = s.keys[s.first]
 		offset = float64(s.scroll.Y) - s.prefix(s.first)
+	}
+	oldAnchorPrefix := math.NaN()
+	if anchor != "" {
+		if oldIndex, ok := s.index[anchor]; ok {
+			oldAnchorPrefix = s.prefix(oldIndex)
+		}
 	}
 	if s.height == nil {
 		s.height = make(map[string]float64)
@@ -216,6 +224,9 @@ func (s *transcriptWindow) sync(rows []transcriptRow, waiting bool) {
 	}
 	if anchor != "" && !s.follow {
 		if i, ok := s.index[anchor]; ok {
+			if !math.IsNaN(oldAnchorPrefix) && math.Abs(s.prefix(i)-oldAnchorPrefix) > 0.5 {
+				s.anchorReveal = true
+			}
 			s.scroll.Y = float32(max(s.prefix(i)+offset, 0))
 		} else {
 			s.anchorValid = false
@@ -282,6 +293,7 @@ func (s *transcriptWindow) measure(i int, h float32) bool {
 	if s.anchorValid && !s.follow && (!s.selecting || known) {
 		if anchor, ok := s.index[s.anchorKey]; ok && i < anchor {
 			s.scroll.Y = max(s.scroll.Y+float32(delta), 0)
+			s.anchorReveal = true
 		}
 	}
 	return true
@@ -368,6 +380,7 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 	}
 	if s.follow || n == 0 {
 		s.anchorValid = false
+		s.anchorReveal = false
 	} else if !s.selecting {
 		anchor := min(max(s.first, 0), n-1)
 		s.anchorKey = s.keys[anchor]

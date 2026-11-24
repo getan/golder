@@ -481,6 +481,12 @@ func (a *App) center(c *ui.Context) {
 			previous := 0
 			rendered := make(map[string]bool)
 			hits := make([]transcriptMenuHit, 0)
+			anchorIndex := -1
+			if window.anchorValid {
+				if index, ok := window.index[window.anchorKey]; ok {
+					anchorIndex = index
+				}
+			}
 			for _, visible := range ranges {
 				if visible.lo > previous {
 					space := window.prefix(visible.lo) - window.prefix(previous) - transcriptRowGap
@@ -511,6 +517,11 @@ func (a *App) center(c *ui.Context) {
 						c.Invalidate()
 					}
 					row.Children(func() {
+						if i == anchorIndex && window.anchorReveal {
+							marker := ui.Box(c.Key("transcript-anchor")).Absolute().Top(float32(window.anchorOffset)).Width(0).Height(0).Shrink(0)
+							marker.ScrollIntoView(ui.ScrollIntoViewOptions{Block: ui.ScrollStart})
+							window.anchorReveal = false
+						}
 						if i < len(rows) {
 							a.transcriptRowView(c, rows[i])
 						} else if waiting {
@@ -519,6 +530,9 @@ func (a *App) center(c *ui.Context) {
 					})
 				}
 				previous = visible.hi
+			}
+			if anchorIndex < 0 || !rendered[window.anchorKey] {
+				window.anchorReveal = false
 			}
 			window.menuHits = hits
 			for key := range window.measuring {
