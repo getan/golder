@@ -338,8 +338,8 @@ jobs:
             done < <(find "$app" -type f -print0)
             mib=$(du -sm "$app" | awk '{print $1}')
             echo "installed app size: ${mib} MiB"
-            # Keep a bounded budget for the offline renderers and Lark helper.
-            test "$mib" -lt 60
+            # Keep a bounded budget for the offline renderers and both helpers.
+            test "$mib" -le 65
           fi
 
       - uses: actions/upload-artifact@v4

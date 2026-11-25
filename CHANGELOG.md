@@ -54,6 +54,8 @@ interactive REPL/TUI.
 - Recompute both bundled helper checksums after MyGo signs nested macOS
   executables, so the DOCX helper no longer fails the release bundle boundary
   check.
+- Raise the bounded macOS app-size budget from 60 to 65 MiB; the added DOCX
+  helper now reaches the old exact limit.
 - Preserve MyGo's wheel glide when the transcript corrects its offset for
   measured row heights, eliminating the scroll hitch caused by layout
   anchoring cancelling the wheel. The MyGo fork API is `ScrollState.AnchorBy`.
