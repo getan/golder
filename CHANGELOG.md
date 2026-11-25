@@ -24,6 +24,10 @@ interactive REPL/TUI.
   and an anchor far beyond the real content.
 
 ### Lark extension
+- Abort a GitHub or mirror helper download after 15 seconds without a byte, or
+  sustained throughput below 50 KB/s, and fall through to the next source. The
+  TUI shows the stage, downloaded/total bytes and source, refreshed every
+  200 ms.
 - Run `file_transfer` lark-cli invocations with the plugin's resolved project
   root as their working directory. `{file}` outputs inside the project now pass
   lark-cli's allowlist, while `HOME`, `CFFIXED_USER_HOME` and `XDG_*` still point

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -12,7 +13,7 @@ import (
 // These seams keep the update flow testable without network access or a live
 // manager; production uses the release downloader and the shared rebind.
 var (
-	installLarkRelease = extensions.InstallLarkRelease
+	installLarkRelease = extensions.InstallLarkReleaseWithProgress
 	rebindLarkSource   = extensions.RebindLarkSource
 	larkReleaseFor     = extensions.LarkReleaseFor
 )
@@ -24,11 +25,27 @@ type larkHelperUpdate struct {
 	phase       string // confirm, installing, failed, done
 	err         string
 	cancel      context.CancelFunc
+	progressMu  sync.Mutex
+	progress    extensions.LarkDownloadProgress
 }
 
 type larkHelperDoneMsg struct {
 	pkg extensions.ManagedPackage
 	err error
+}
+
+type larkHelperProgressMsg struct{}
+
+func (u *larkHelperUpdate) setProgress(p extensions.LarkDownloadProgress) {
+	u.progressMu.Lock()
+	u.progress = p
+	u.progressMu.Unlock()
+}
+
+func (u *larkHelperUpdate) progressSnapshot() extensions.LarkDownloadProgress {
+	u.progressMu.Lock()
+	defer u.progressMu.Unlock()
+	return u.progress
 }
 
 type larkHelperInfo struct {
@@ -134,13 +151,19 @@ func (m Model) updateLarkHelperConfirmed() (tea.Model, tea.Cmd) {
 	version := u.hostVersion
 	manager := m.opts.Extensions
 	m = m.showLarkUpdate()
-	return m, func() tea.Msg {
-		pkg, err := installLarkRelease(ctx, version)
+	download := func() tea.Msg {
+		pkg, err := installLarkRelease(ctx, version, u.setProgress)
 		if err == nil {
 			err = rebindLarkSource(manager, pkg)
 		}
 		return larkHelperDoneMsg{pkg: pkg, err: err}
 	}
+	tick := tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { return larkHelperProgressMsg{} })
+	return m, tea.Batch(download, tick)
+}
+
+func (m Model) waitLarkProgress() tea.Cmd {
+	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { return larkHelperProgressMsg{} })
 }
 
 func (m Model) finishLarkHelperUpdate(msg larkHelperDoneMsg) (tea.Model, tea.Cmd) {
@@ -176,6 +199,12 @@ func (m Model) showLarkUpdate() Model {
 	var rows []pickItem
 	switch u.phase {
 	case "installing":
+		if p := u.progressSnapshot(); p.Stage != "" {
+			info = append(info,
+				pickInfoLine{Label: "Progress", Value: larkProgressText(p)},
+				pickInfoLine{Label: "Source", Value: p.Source},
+			)
+		}
 		rows = append(rows, pickItem{Title: "Downloading, verifying and installing…", Heading: true})
 		rows = append(rows, pickItem{Title: "Cancel", Value: extensionValue("back"), Info: info})
 	case "failed":
@@ -202,4 +231,23 @@ func (m Model) showLarkUpdate() Model {
 	m.menu.pickHint = "↑↓ Select · Enter · Esc Close"
 	m.relayout()
 	return m
+}
+
+func larkProgressText(p extensions.LarkDownloadProgress) string {
+	text := fmt.Sprintf("%s · %s", p.Stage, larkBytes(p.Downloaded))
+	if p.Total > 0 {
+		text += " / " + larkBytes(p.Total)
+	}
+	return text
+}
+
+func larkBytes(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }

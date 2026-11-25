@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	larkversion "github.com/getan/golder/extension/plugins/lark/version"
 )
@@ -79,5 +80,33 @@ func TestLarkChecksumMirrorsMustAgree(t *testing.T) {
 	})}
 	if _, err := installLarkRelease(context.Background(), release, client); err == nil || !strings.Contains(err.Error(), "disagree") {
 		t.Fatalf("mirror disagreement was not rejected: %v", err)
+	}
+}
+
+type silentReleaseBody struct{ ctx context.Context }
+
+func (b *silentReleaseBody) Read([]byte) (int, error) {
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (b *silentReleaseBody) Close() error { return nil }
+
+func TestLarkDownloadWatchdogAbortsSilentSource(t *testing.T) {
+	oldWindow, oldRate := larkSilenceWindow, larkMinRate
+	larkSilenceWindow = 50 * time.Millisecond
+	larkMinRate = 1
+	t.Cleanup(func() { larkSilenceWindow, larkMinRate = oldWindow, oldRate })
+
+	client := &http.Client{Transport: larkRoundTripper(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       &silentReleaseBody{ctx: req.Context()},
+			Header:     make(http.Header),
+		}, nil
+	})}
+	_, err := releaseDownloadProgress(context.Background(), client, "https://github.com/getan/golder/releases/download/v1.0.0/archive", 1<<20, "archive", nil)
+	if err == nil || !strings.Contains(err.Error(), "no data") {
+		t.Fatalf("silent source was not aborted: %v", err)
 	}
 }

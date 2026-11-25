@@ -1113,6 +1113,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.finishLarkWizardOperation(msg)
 	case larkHelperDoneMsg:
 		return m.finishLarkHelperUpdate(msg)
+	case larkHelperProgressMsg:
+		if m.larkUpdate == nil || m.larkUpdate.phase != "installing" {
+			return m, nil
+		}
+		return m.showLarkUpdate(), m.waitLarkProgress()
 	case computerRequestedMsg:
 		if m.running && !m.sideRun && m.session != nil && m.session.header.ID == msg.sessionID {
 			m.computerSuggested = msg.application

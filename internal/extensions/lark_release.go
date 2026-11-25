@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	larkversion "github.com/getan/golder/extension/plugins/lark/version"
@@ -33,6 +34,20 @@ type LarkRelease struct {
 	ArchiveURL  string
 	ChecksumURL string
 }
+
+// LarkDownloadProgress is one downloader progress sample. Total is zero when
+// the server does not announce a Content-Length.
+type LarkDownloadProgress struct {
+	Stage      string
+	Source     string
+	Downloaded int64
+	Total      int64
+}
+
+var (
+	larkSilenceWindow = 15 * time.Second
+	larkMinRate       = float64(50 * 1024)
+)
 
 func larkRelease(version, goos, goarch, base string) (LarkRelease, error) {
 	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
@@ -59,6 +74,12 @@ func LarkReleaseFor(version string) (LarkRelease, error) {
 // InstallLarkRelease downloads the exact matching first-party release after an
 // explicit operator decision and verifies the archive before installing it.
 func InstallLarkRelease(ctx context.Context, version string) (ManagedPackage, error) {
+	return InstallLarkReleaseWithProgress(ctx, version, nil)
+}
+
+// InstallLarkReleaseWithProgress is InstallLarkRelease with byte progress.
+// Progress callbacks run on the download goroutine and must not block.
+func InstallLarkReleaseWithProgress(ctx context.Context, version string, progress func(LarkDownloadProgress)) (ManagedPackage, error) {
 	release, err := LarkReleaseFor(version)
 	if err != nil {
 		return ManagedPackage{}, err
@@ -69,10 +90,14 @@ func InstallLarkRelease(ctx context.Context, version string) (ManagedPackage, er
 		}
 		return nil
 	}}
-	return installLarkRelease(ctx, release, client)
+	return installLarkReleaseWithProgress(ctx, release, client, progress)
 }
 
 func releaseDownload(ctx context.Context, client *http.Client, rawURL string, max int64) ([]byte, error) {
+	return releaseDownloadProgress(ctx, client, rawURL, max, "", nil)
+}
+
+func releaseDownloadProgress(ctx context.Context, client *http.Client, rawURL string, max int64, stage string, progress func(LarkDownloadProgress)) ([]byte, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" || u.User != nil {
 		return nil, errors.New("invalid Lark release URL")
@@ -81,6 +106,9 @@ func releaseDownload(ctx context.Context, client *http.Client, rawURL string, ma
 	if err != nil {
 		return nil, errors.New("cannot prepare Lark release download")
 	}
+	dlCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req = req.WithContext(dlCtx)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, errors.New("Lark release download failed")
@@ -89,11 +117,75 @@ func releaseDownload(ctx context.Context, client *http.Client, rawURL string, ma
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("Lark release server returned HTTP %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
-	if err != nil || int64(len(body)) > max {
-		return nil, errors.New("Lark release download was incomplete or too large")
+	source, total := u.Hostname(), resp.ContentLength
+	if total < 0 {
+		total = 0
 	}
-	return body, nil
+	start := time.Now()
+	var downloaded, lastData atomic.Int64
+	lastData.Store(start.UnixNano())
+	var slow atomic.Pointer[string]
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case now := <-ticker.C:
+				if now.Sub(time.Unix(0, lastData.Load())) >= larkSilenceWindow {
+					reason := "no data for " + larkSilenceWindow.String()
+					slow.Store(&reason)
+					cancel()
+					return
+				}
+				elapsed := now.Sub(start)
+				if downloaded.Load() > 0 && elapsed >= larkSilenceWindow {
+					rate := float64(downloaded.Load()) / elapsed.Seconds()
+					if rate < larkMinRate {
+						reason := fmt.Sprintf("download too slow (%.0f KB/s)", rate/1024)
+						slow.Store(&reason)
+						cancel()
+						return
+					}
+				}
+			}
+		}
+	}()
+	var body bytes.Buffer
+	buf := make([]byte, 32<<10)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if int64(body.Len())+int64(n) > max {
+				return nil, errors.New("Lark release download was incomplete or too large")
+			}
+			_, _ = body.Write(buf[:n])
+			downloaded.Add(int64(n))
+			lastData.Store(time.Now().UnixNano())
+			if progress != nil {
+				progress(LarkDownloadProgress{Stage: stage, Source: source, Downloaded: downloaded.Load(), Total: total})
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			if p := slow.Load(); p != nil {
+				return nil, errors.New("Lark release download failed: " + *p)
+			}
+			if dlCtx.Err() != nil {
+				return nil, dlCtx.Err()
+			}
+			return nil, errors.New("Lark release download was incomplete")
+		}
+	}
+	if total > 0 && int64(body.Len()) != total {
+		return nil, errors.New("Lark release download was incomplete")
+	}
+	return body.Bytes(), nil
 }
 
 func larkChecksumFor(checksums []byte, archive string) (string, error) {
@@ -116,23 +208,23 @@ func larkChecksumFor(checksums []byte, archive string) (string, error) {
 	return want, nil
 }
 
-func larkDownloadAttempt(ctx context.Context, client *http.Client, rawURL string, max int64, timeout time.Duration) ([]byte, error) {
+func larkDownloadAttempt(ctx context.Context, client *http.Client, rawURL string, max int64, timeout time.Duration, stage string, progress func(LarkDownloadProgress)) ([]byte, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	return releaseDownload(ctx, client, rawURL, max)
+	return releaseDownloadProgress(ctx, client, rawURL, max, stage, progress)
 }
 
 // fetchLarkChecksum tries GitHub direct first (the trust anchor). If it is
 // unreachable, mirror copies are cross-checked: they must all agree on the
 // archive digest, so one mirror cannot vouch for bytes it poisoned. A single
 // reachable mirror is accepted, matching install.sh's documented tradeoff.
-func fetchLarkChecksum(ctx context.Context, client *http.Client, release LarkRelease) (string, error) {
+func fetchLarkChecksum(ctx context.Context, client *http.Client, release LarkRelease, progress func(LarkDownloadProgress)) (string, error) {
 	sources := githubmirror.Apply(release.ChecksumURL, githubmirror.Prefixes())
 	directErr := error(nil)
-	if body, err := larkDownloadAttempt(ctx, client, sources[0], 2<<20, 45*time.Second); err == nil {
+	if body, err := larkDownloadAttempt(ctx, client, sources[0], 2<<20, 45*time.Second, "checksums", progress); err == nil {
 		if want, err := larkChecksumFor(body, release.Archive); err == nil {
 			return want, nil
 		} else {
@@ -143,7 +235,7 @@ func fetchLarkChecksum(ctx context.Context, client *http.Client, release LarkRel
 	}
 	var candidates []string
 	for _, src := range sources[1:] {
-		body, err := larkDownloadAttempt(ctx, client, src, 2<<20, 45*time.Second)
+		body, err := larkDownloadAttempt(ctx, client, src, 2<<20, 45*time.Second, "checksums", progress)
 		if err != nil {
 			continue
 		}
@@ -170,10 +262,10 @@ func fetchLarkChecksum(ctx context.Context, client *http.Client, release LarkRel
 // fetchLarkArchive tries direct GitHub, then each configured mirror. The
 // checksum is already trusted by fetchLarkChecksum, so a mirror serving a
 // stale or corrupt archive simply fails over.
-func fetchLarkArchive(ctx context.Context, client *http.Client, release LarkRelease, want string) ([]byte, error) {
+func fetchLarkArchive(ctx context.Context, client *http.Client, release LarkRelease, want string, progress func(LarkDownloadProgress)) ([]byte, error) {
 	var last error
 	for _, src := range githubmirror.Apply(release.ArchiveURL, githubmirror.Prefixes()) {
-		archive, err := larkDownloadAttempt(ctx, client, src, 128<<20, 90*time.Second)
+		archive, err := larkDownloadAttempt(ctx, client, src, 128<<20, 90*time.Second, "archive", progress)
 		if err != nil {
 			last = err
 			continue
@@ -192,11 +284,15 @@ func fetchLarkArchive(ctx context.Context, client *http.Client, release LarkRele
 }
 
 func installLarkRelease(ctx context.Context, release LarkRelease, client *http.Client) (ManagedPackage, error) {
-	want, err := fetchLarkChecksum(ctx, client, release)
+	return installLarkReleaseWithProgress(ctx, release, client, nil)
+}
+
+func installLarkReleaseWithProgress(ctx context.Context, release LarkRelease, client *http.Client, progress func(LarkDownloadProgress)) (ManagedPackage, error) {
+	want, err := fetchLarkChecksum(ctx, client, release, progress)
 	if err != nil {
 		return ManagedPackage{}, err
 	}
-	archive, err := fetchLarkArchive(ctx, client, release, want)
+	archive, err := fetchLarkArchive(ctx, client, release, want, progress)
 	if err != nil {
 		return ManagedPackage{}, err
 	}

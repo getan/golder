@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/getan/golder/internal/extensions"
 )
 
@@ -73,11 +74,23 @@ func stubLarkRelease(t *testing.T, version string) {
 	t.Cleanup(func() { larkReleaseFor = old })
 }
 
-func stubLarkInstall(t *testing.T, fn func(context.Context, string) (extensions.ManagedPackage, error)) {
+func stubLarkInstall(t *testing.T, fn func(context.Context, string, func(extensions.LarkDownloadProgress)) (extensions.ManagedPackage, error)) {
 	t.Helper()
 	old := installLarkRelease
 	installLarkRelease = fn
 	t.Cleanup(func() { installLarkRelease = old })
+}
+
+func runLarkCommand(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			m = apply(t, m, c())
+		}
+		return m
+	}
+	return apply(t, m, msg)
 }
 
 func TestLarkHelperUpdateAppearsOnlyOnVersionMismatch(t *testing.T) {
@@ -108,7 +121,7 @@ func TestLarkHelperUpdateKeepsOldHelperOnDownloadFailure(t *testing.T) {
 	m := larkUpdateModel(t)
 	stubLarkRelease(t, "1.1.0")
 	downloads := 0
-	stubLarkInstall(t, func(context.Context, string) (extensions.ManagedPackage, error) {
+	stubLarkInstall(t, func(context.Context, string, func(extensions.LarkDownloadProgress)) (extensions.ManagedPackage, error) {
 		downloads++
 		return extensions.ManagedPackage{}, errors.New("network unreachable")
 	})
@@ -131,7 +144,7 @@ func TestLarkHelperUpdateKeepsOldHelperOnDownloadFailure(t *testing.T) {
 	if cmd == nil || m.larkUpdate.phase != "installing" {
 		t.Fatal("confirmation did not schedule the download")
 	}
-	m = apply(t, m, cmd())
+	m = runLarkCommand(t, m, cmd)
 	if m.larkUpdate.phase != "failed" || !strings.Contains(m.View().Content, "network unreachable") {
 		t.Fatalf("failure was not reported: %+v %s", m.larkUpdate, m.View().Content)
 	}
@@ -154,7 +167,7 @@ func TestLarkHelperUpdateRebindsAndDisablesSource(t *testing.T) {
 	stubLarkRelease(t, "1.1.0")
 	newPkg := larkUpdateFixturePackage(t, "1.1.0", "helper-v2")
 	var installedVersion string
-	stubLarkInstall(t, func(_ context.Context, version string) (extensions.ManagedPackage, error) {
+	stubLarkInstall(t, func(_ context.Context, version string, _ func(extensions.LarkDownloadProgress)) (extensions.ManagedPackage, error) {
 		installedVersion = version
 		return newPkg, nil
 	})
@@ -165,7 +178,7 @@ func TestLarkHelperUpdateRebindsAndDisablesSource(t *testing.T) {
 	m = next.(Model)
 	next, cmd := m.chooseExtension(extensionValue("lark-helper-confirm"))
 	m = next.(Model)
-	m = apply(t, m, cmd())
+	m = runLarkCommand(t, m, cmd)
 
 	if m.larkUpdate.phase != "done" {
 		t.Fatalf("update did not finish: %+v", m.larkUpdate)
@@ -186,6 +199,28 @@ func TestLarkHelperUpdateRebindsAndDisablesSource(t *testing.T) {
 	}
 	if view := m.View().Content; !strings.Contains(view, "Source disabled; review to enable") {
 		t.Fatalf("completion did not ask for review: %s", view)
+	}
+}
+
+func TestLarkHelperUpdateShowsDownloadProgress(t *testing.T) {
+	m := larkUpdateModel(t)
+	stubLarkRelease(t, "1.1.0")
+	next, _ := m.extensionDetail(extensions.LarkSourceRef)
+	m = next.(Model)
+	next, _ = m.chooseExtension(extensionValue("lark-helper-update"))
+	m = next.(Model)
+	next, _ = m.chooseExtension(extensionValue("lark-helper-confirm"))
+	m = next.(Model)
+	if m.larkUpdate == nil {
+		t.Fatal("confirmation did not retain the update state")
+	}
+	m.larkUpdate.setProgress(extensions.LarkDownloadProgress{
+		Stage: "archive", Source: "ghfast.top", Downloaded: 3 << 20, Total: 8 << 20,
+	})
+	m = m.showLarkUpdate()
+	view := m.View().Content
+	if !strings.Contains(view, "3.0 MB / 8.0 MB") || !strings.Contains(view, "ghfast.top") {
+		t.Fatalf("progress is not visible: %s", view)
 	}
 }
 
