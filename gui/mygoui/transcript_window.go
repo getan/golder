@@ -426,7 +426,12 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 		}
 	}
 	if s.gestureDelta != 0 && s.anchorValid && !s.follow && !s.selecting {
-		s.anchorReveal = true
+		// Do not pin an anchor that has no committed screen position yet. On the
+		// first wheel after follow mode, sync may have just selected an anchor
+		// from the bottom sentinel; a reveal would cancel the native glide.
+		if _, ok := s.screens[s.anchorKey]; ok {
+			s.anchorReveal = true
+		}
 	}
 	if s.follow || n == 0 {
 		s.anchorValid = false

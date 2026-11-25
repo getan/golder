@@ -38,6 +38,8 @@ interactive REPL/TUI.
   and an anchor far beyond the real content.
 - Make the transcript wheel-pause regression wait for wheel momentum to move
   the viewport instead of depending on a fixed 300 ms delay.
+- Skip anchor reveal when the anchor has no committed screen position yet, so
+  the first upward wheel after follow mode does not cancel the native glide.
 
 ### Lark extension
 - Abort a GitHub or mirror helper download after 15 seconds without a byte, or
