@@ -39,6 +39,13 @@ interactive REPL/TUI.
   repeated tool-call index carrying a new id as a new call. Gateways that omit
   `index` or use the pre-tool_calls shape no longer lose or merge calls.
 
+### Extensions
+- Add the `golder-docx` MCP stdio plugin: `docx_read`, `docx_create` and
+  `docx_edit` for workspace-relative .docx files, including headings,
+  paragraphs, bullets, tables and PNG/JPEG/GIF images. The plugin preflights
+  ZIP/XML limits, rejects macro-enabled, encrypted, OLE and embedded content,
+  re-encodes images, confines paths to the workspace and writes atomically.
+
 ### GUI
 - Collapse completed tool cards at the end of a run and prefetch two viewport
   pages of transcript row heights, so command-card-heavy sessions do not

@@ -6,6 +6,7 @@ transport; being first-party does not bypass source trust, approval or sandboxin
 
 | Package | Executable | Transport |
 |---|---|---|
+| [docx](docx/README.md) | `golder-docx` | MCP stdio |
 | [lark](lark/README.md) | `golder-lark` | MCP stdio |
 
 Host-independent business code stays inside `extension/plugins/<name>/internal/`; generic

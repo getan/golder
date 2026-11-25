@@ -1,5 +1,11 @@
 # docx 插件安全审计与设计
 
+> 实现状态：已完成，代码在 `extension/plugins/docx/`。工具为 `docx_read`、
+> `docx_create`、`docx_edit`，覆盖标题、段落、列表、表格、图片、占位符替换与
+> 追加内容。依赖固定为 `github.com/mmonterroca/docxgo/v2 v2.16.0`。读取路径直接
+> 解析 `word/document.xml`，因为该版本 docxgo 的 `Paragraph.Style()` 始终返回
+> nil，无法可靠识别标题；写入仍使用 docxgo。使用说明见插件 README。
+
 ## 1. 审计对象
 
 - 仓库：`https://github.com/mmonterroca/docxgo`

@@ -1,0 +1,13 @@
+golder-docx
+
+This plugin uses github.com/mmonterroca/docxgo/v2 (MIT License),
+Copyright (c) 2024-2026 Misael Monterroca.
+
+docxgo is used as a library for OOXML document construction and reading.
+The plugin adds a security boundary in front of the library: workspace-confined
+paths, ZIP/XML resource limits, macro/embedded-content rejection, image
+re-encoding, and atomic output. See docs/docx-plugin-design.md in the golder
+repository for the audit and threat model.
+
+The full MIT license text is in the module source:
+https://github.com/mmonterroca/docxgo/blob/master/LICENSE

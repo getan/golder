@@ -199,6 +199,8 @@ github.com/mattn/go-sixel v0.0.11 h1:+1qa839dVz5UxA0w/gQBbC1+5hb1b6DSAidf+caN63s
 github.com/mattn/go-sixel v0.0.11/go.mod h1:UzxovwVMmjEBx5ui3fav05lfRkxNiaLLDJuOkanrVOI=
 github.com/microcosm-cc/bluemonday v1.0.27 h1:MpEUotklkwCSLeH+Qdx1VJgNqLlpY2KXwXFM08ygZfk=
 github.com/microcosm-cc/bluemonday v1.0.27/go.mod h1:jFi9vgW+H7c3V0lb6nR74Ib/DIB5OBs92Dimizgw2cA=
+github.com/mmonterroca/docxgo/v2 v2.16.0 h1:IqiSGU3CuiELIC6SaKwcceSIqWV19myHMtDGhZP1pZw=
+github.com/mmonterroca/docxgo/v2 v2.16.0/go.mod h1:Yc3h7M+sssxGMz51qQ8EHbfDb2NyleLbS+lZLH9Y0us=
 github.com/modelcontextprotocol/go-sdk v1.8.0 h1:KIvahhYqwtbeniWVPs3TcXEA7b8jEtwfBpOTAI+Urx4=
 github.com/modelcontextprotocol/go-sdk v1.8.0/go.mod h1:dL7u98E/zjJTGzEq+j30jQ8K2k1mb6LeAH4inEcSGts=
 github.com/muesli/cancelreader v0.2.2 h1:3I4Kt4BQjOR54NavqnDogx/MIoWBFa0StPA8ELUXHmA=

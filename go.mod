@@ -27,6 +27,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/mmonterroca/docxgo/v2 v2.16.0
 	github.com/muesli/termenv v0.16.0
 	github.com/openai/openai-go v1.12.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
