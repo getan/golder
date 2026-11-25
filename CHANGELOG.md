@@ -71,6 +71,11 @@ interactive REPL/TUI.
   mirror list; custom mirror URLs and non-GitHub test endpoints are prefixed
   again instead of being filtered out.
 
+### Build
+- Wait for the Android APK job before the checksums job downloads the
+  `golder-*` artifact set; the broad pattern otherwise races the APK upload and
+  fails with “No artifacts found”.
+
 ### Windows desktop compatibility
 - Add a native File/Exit menu and guard shutdown while a Windows file picker is
   open. The Windows GUI packaging workflow exercises the menu and picker on a

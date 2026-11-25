@@ -131,7 +131,9 @@ jobs:
           if-no-files-found: error
 
   checksums:
-    needs: binaries
+    # The broad golder-* pattern also matches golder-android-apk; wait for the
+    # Android upload to finalize or this job can race it and fail to download.
+    needs: [binaries, android]
     runs-on: ubuntu-latest
     steps:
       - name: Download all archives
