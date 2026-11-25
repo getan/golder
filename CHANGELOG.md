@@ -24,6 +24,13 @@ interactive REPL/TUI.
   and an anchor far beyond the real content.
 
 ### Lark extension
+- Run `file_transfer` lark-cli invocations with the plugin's resolved project
+  root as their working directory. `{file}` outputs inside the project now pass
+  lark-cli's allowlist, while `HOME`, `CFFIXED_USER_HOME` and `XDG_*` still point
+  at the private state home. The explicit `Runner.RunIn` path is covered by a
+  real native-runner test; workspace escapes, symlink escapes, `@file`, stdin
+  and placeholder checks are unchanged. Bump the helper to 1.5.71 so existing
+  installations receive this fix.
 - Add GitHub mirror fallback to the TUI helper download, sharing the
   `GOLDER_MIRROR` prefix list with `golder update` and install.sh. Checksums are
   fetched from GitHub direct first; if that fails, mirror copies must agree on

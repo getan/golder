@@ -17,6 +17,7 @@ import (
 
 type fakeRunner struct {
 	calls []string
+	dirs  []string
 	fn    func(string, []string, []byte) (Output, error)
 }
 
@@ -26,6 +27,11 @@ func (f *fakeRunner) Run(_ context.Context, service string, args []string, input
 		return f.fn(service, args, input)
 	}
 	return Output{Stdout: []byte(`{"ok":true,"identity":"user","data":{"items":[]}}`)}, nil
+}
+
+func (f *fakeRunner) RunIn(ctx context.Context, service, dir string, args []string, input []byte) (Output, error) {
+	f.dirs = append(f.dirs, dir)
+	return f.Run(ctx, service, args, input)
 }
 
 func approved() context.Context {

@@ -29,6 +29,10 @@ type Output struct {
 
 type Runner interface {
 	Run(context.Context, string, []string, []byte) (Output, error)
+	// RunIn runs with an explicit working directory while keeping the private
+	// HOME and XDG environment from Config. File transfers use the plugin's
+	// resolved project root so both sides agree on the allowlist root.
+	RunIn(context.Context, string, string, []string, []byte) (Output, error)
 }
 
 type NativeRunner struct{ Config Config }
@@ -60,6 +64,16 @@ func nativeExecutable(path string) error {
 }
 
 func (r NativeRunner) Run(ctx context.Context, service string, args []string, input []byte) (Output, error) {
+	return r.RunIn(ctx, service, r.Config.Home, args, input)
+}
+
+func (r NativeRunner) RunIn(ctx context.Context, service, dir string, args []string, input []byte) (Output, error) {
+	if strings.TrimSpace(dir) == "" {
+		dir = r.Config.Home
+	}
+	if !filepath.IsAbs(dir) {
+		return Output{}, errors.New("CLI working directory must be absolute")
+	}
 	path := r.Config.LarkCLI
 	if service == "project" {
 		path = r.Config.ProjectCLI
@@ -82,7 +96,7 @@ func (r NativeRunner) Run(ctx context.Context, service string, args []string, in
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Stdin = bytes.NewReader(input)
-	cmd.Dir = r.Config.Home
+	cmd.Dir = dir
 	cmd.Env = childEnv(r.Config)
 	cmd.WaitDelay = time.Second
 	configureChild(cmd)

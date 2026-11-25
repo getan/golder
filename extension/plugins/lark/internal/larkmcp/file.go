@@ -34,7 +34,11 @@ func (p *Plugin) file(ctx context.Context, d definition, in input) Result {
 		return fileFailure(errors.New("argv must contain exactly one {file} placeholder"))
 	}
 	upload := in.Operation == "upload"
-	absolute, err := resolveTransferPath(path, upload)
+	root, err := transferRoot()
+	if err != nil {
+		return fileFailure(err)
+	}
+	absolute, err := resolveTransferPathIn(root, path, upload)
 	if err != nil {
 		return fileFailure(err)
 	}
@@ -46,7 +50,7 @@ func (p *Plugin) file(ctx context.Context, d definition, in input) Result {
 		args = append(args, "--yes")
 	}
 	_ = d
-	return p.run(ctx, service, args, true)
+	return p.runIn(ctx, service, root, args, true)
 }
 
 func fileFailure(err error) Result {
@@ -165,17 +169,28 @@ func localPathFlag(key string) bool {
 }
 
 func resolveTransferPath(raw string, upload bool) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || filepath.IsAbs(raw) {
-		return "", errors.New("path must be a non-empty workspace-relative path")
+	root, err := transferRoot()
+	if err != nil {
+		return "", err
 	}
+	return resolveTransferPathIn(root, raw, upload)
+}
+
+// transferRoot is the exact cwd both the plugin path check and lark-cli must
+// use. It is resolved once so a symlinked project path cannot produce two
+// different allowlist roots.
+func transferRoot() (string, error) {
 	root, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", err
+	return filepath.EvalSymlinks(root)
+}
+
+func resolveTransferPathIn(root, raw string, upload bool) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || filepath.IsAbs(raw) {
+		return "", errors.New("path must be a non-empty workspace-relative path")
 	}
 	absolute := filepath.Join(root, filepath.Clean(raw))
 	if !insideWorkspace(root, absolute) {

@@ -165,6 +165,10 @@ func (p *Plugin) Call(ctx context.Context, name string, raw json.RawMessage) Res
 }
 
 func (p *Plugin) run(ctx context.Context, service string, args []string, write bool) Result {
+	return p.runIn(ctx, service, "", args, write)
+}
+
+func (p *Plugin) runIn(ctx context.Context, service, dir string, args []string, write bool) Result {
 	args = append([]string{}, args...)
 	if service == "lark" {
 		args = append(args, "--as=user")
@@ -174,7 +178,13 @@ func (p *Plugin) run(ctx context.Context, service string, args []string, write b
 	} else {
 		args = append(args, "--format=json")
 	}
-	out, err := p.Runner.Run(ctx, service, args, nil)
+	var out Output
+	var err error
+	if dir == "" {
+		out, err = p.Runner.Run(ctx, service, args, nil)
+	} else {
+		out, err = p.Runner.RunIn(ctx, service, dir, args, nil)
+	}
 	r := p.withCLIDiagnostics(normalize(service, out, err, write), args, out, err)
 	if r.OK && service == "lark" && larkDryRun(args) {
 		r.ExecutionState, r.Verification = "not_executed", "preview"
