@@ -12,6 +12,12 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### GUI
+- Anchor the transcript's middle visible row across first measurements and
+  unknown rows. The reveal target is the row's previous committed screen
+  position plus the consumed gesture, with padding-corrected offsets; follow
+  mode now re-arms only after an explicit downward scroll, not when content
+  shrinks. Cold and warm 240-row Bash regressions report zero reverse jumps and
+  zero settled drift.
 - Keep the transcript's top visible row anchored while rows above it are
   measured, including their first measurement. The first scroll in a historical
   session no longer shifts the content by the difference between estimated and

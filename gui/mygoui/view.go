@@ -518,9 +518,16 @@ func (a *App) center(c *ui.Context) {
 					}
 					row.Children(func() {
 						if i == anchorIndex && window.anchorReveal {
-							marker := ui.Box(c.Key("transcript-anchor")).Absolute().Top(float32(window.anchorOffset)).Width(0).Height(0).Shrink(0)
+							top := window.anchorOffset
+							if window.revealScreen {
+								top = -window.revealTarget
+							} else if screen, ok := window.screens[window.anchorKey]; ok {
+								top = -(screen.y - screen.scroll)
+							}
+							marker := ui.Box(c.Key("transcript-anchor")).Absolute().Top(float32(top)).Width(0).Height(0).Shrink(0)
 							marker.ScrollIntoView(ui.ScrollIntoViewOptions{Block: ui.ScrollStart})
 							window.anchorReveal = false
+							window.revealScreen = false
 						}
 						if i < len(rows) {
 							a.transcriptRowView(c, rows[i])
@@ -528,6 +535,9 @@ func (a *App) center(c *ui.Context) {
 							ui.Text(c.Key("awaiting-first-output"), "正在思考…").FontSize(12).TextColor(t.TextMuted)
 						}
 					})
+					if bounds := row.Bounds(); bounds.H > 0 {
+						window.screens[key] = transcriptScreen{y: float64(bounds.Y), scroll: float64(scroll.Bounds().Y)}
+					}
 				}
 				previous = visible.hi
 			}
