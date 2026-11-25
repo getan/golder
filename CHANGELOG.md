@@ -51,6 +51,9 @@ interactive REPL/TUI.
   `mcp:docx` source and requires the normal explicit approval before enabling.
 
 ### GUI
+- Recompute both bundled helper checksums after MyGo signs nested macOS
+  executables, so the DOCX helper no longer fails the release bundle boundary
+  check.
 - Preserve MyGo's wheel glide when the transcript corrects its offset for
   measured row heights, eliminating the scroll hitch caused by layout
   anchoring cancelling the wheel. The MyGo fork API is `ScrollState.AnchorBy`.

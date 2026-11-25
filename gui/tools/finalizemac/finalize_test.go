@@ -45,6 +45,13 @@ func TestFinalizeSignsChecksumBeforePackaging(t *testing.T) {
 			if err := os.WriteFile(helper, []byte("signed helper"), 0o755); err != nil {
 				t.Fatal(err)
 			}
+			docxHelper := filepath.Join(dir, "Golder GUI.app", "Contents", "Resources", "extensions", "docx", "golder-docx")
+			if err := os.MkdirAll(filepath.Dir(docxHelper), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(docxHelper, []byte("signed docx helper"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			dmg := filepath.Join(dir, "output.dmg")
 			if err := os.WriteFile(dmg, []byte("old image"), 0o600); err != nil {
 				t.Fatal(err)
@@ -86,10 +93,12 @@ fi`,
 				data, _ := os.ReadFile(helper)
 				t.Fatalf("finalize: %v\n%s\n%s\nhelper=%q", err, out, calls, data)
 			}
-			sum := sha256.Sum256([]byte("signed helper"))
-			checksum, err := os.ReadFile(helper + ".sha256")
-			if err != nil || !strings.HasPrefix(string(checksum), fmt.Sprintf("%x", sum)) {
-				t.Fatalf("checksum %q: %v", checksum, err)
+			for path, body := range map[string]string{helper: "signed helper", docxHelper: "signed docx helper"} {
+				sum := sha256.Sum256([]byte(body))
+				checksum, err := os.ReadFile(path + ".sha256")
+				if err != nil || !strings.HasPrefix(string(checksum), fmt.Sprintf("%x", sum)) {
+					t.Fatalf("checksum for %s = %q: %v", path, checksum, err)
+				}
 			}
 			logBytes, err := os.ReadFile(log)
 			if err != nil {
