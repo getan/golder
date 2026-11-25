@@ -132,6 +132,13 @@ func (s *transcriptWindow) copyText(parts []ui.SelectedText) (string, bool) {
 
 func (s *transcriptWindow) Visible() (int, int) { return s.first, s.last }
 
+// setScrollOffset is the only internal writer of scroll.Y. Native scrolling is
+// an input source; sync, measurement and follow all reconcile through this one
+// setter so there is never a second offset to fight over.
+func (s *transcriptWindow) setScrollOffset(y float32) {
+	s.scroll.Y = y
+}
+
 func (s *transcriptWindow) ScrollIntoView(index int) {
 	s.reveal, s.hasReveal = index, true
 }
@@ -144,7 +151,7 @@ func (s *transcriptWindow) jumpToBottom() {
 	s.unseen = 0
 	s.hasReveal = false
 	s.followRearm = false
-	s.scroll.Y = math.MaxFloat32
+	s.setScrollOffset(math.MaxFloat32)
 }
 
 func (s *transcriptWindow) handleScrollInput(ev ui.InputEvent) bool {
@@ -220,7 +227,7 @@ func (s *transcriptWindow) sync(rows []transcriptRow, waiting bool) {
 	}
 	if anchor != "" && !s.follow {
 		if i, ok := s.index[anchor]; ok {
-			s.scroll.Y = float32(max(s.prefix(i)+offset+transcriptPadding, 0))
+			s.setScrollOffset(float32(max(s.prefix(i)+offset+transcriptPadding, 0)))
 		} else {
 			s.anchorValid = false
 		}
@@ -285,7 +292,7 @@ func (s *transcriptWindow) measure(i int, h float32) bool {
 	// selection; later corrections and ordinary scrolling keep the anchor.
 	if s.anchorValid && !s.follow && (!s.selecting || known) {
 		if anchor, ok := s.index[s.anchorKey]; ok && i < anchor {
-			s.scroll.Y = max(s.scroll.Y+float32(delta), 0)
+			s.setScrollOffset(max(s.scroll.Y+float32(delta), 0))
 		}
 	}
 	return true
@@ -304,7 +311,7 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 	// sentinel MaxFloat32 is only meaningful while following; using it here
 	// would compute rows and an anchor far past the real content for one frame.
 	if !s.follow && s.scroll.Y > s.scroll.MaxY {
-		s.scroll.Y = s.scroll.MaxY
+		s.setScrollOffset(s.scroll.MaxY)
 	}
 	if s.scroll.Y < s.scroll.MaxY-1 {
 		s.upScrollPending = false
@@ -345,14 +352,14 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 	s.selection = selection
 	if s.hasReveal {
 		i := min(max(s.reveal, 0), n-1)
-		s.scroll.Y = float32(max(s.prefix(i), 0))
+		s.setScrollOffset(float32(max(s.prefix(i), 0)))
 		s.follow, s.hasReveal = false, false
 	}
 	s.lastScrollY, s.hasScrollY = min(s.scroll.Y, s.scroll.MaxY), true
 	y := float64(s.scroll.Y)
 	if s.follow {
 		y = max(s.prefix(n)-float64(viewport)+2*transcriptPadding, 0)
-		s.scroll.Y = math.MaxFloat32
+		s.setScrollOffset(math.MaxFloat32)
 	}
 	s.first = s.rowAt(max(y-transcriptPadding, 0))
 	s.last = s.rowAt(max(y+float64(viewport)-transcriptPadding, 0))
