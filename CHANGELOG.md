@@ -21,6 +21,10 @@ interactive REPL/TUI.
   native selection, and later scroll corrections continue.
 
 ### Lark extension
+- Fix the TUI helper update to install from the running Golder host release
+  (`v1.5.138`) instead of passing the helper's own version (`1.5.70`) to
+  `InstallLarkRelease`, which looked up a nonexistent host release and reported
+  `matching Lark release checksum was not found`.
 - Bump the bundled `golder-lark` helper to 1.5.70 so the `--file-key` fix and
   the helper lifecycle changes ship as one independently versioned package.
 - Name helper release assets `golder-lark_<host>_helper<helper>_<os>_<arch>.tar.gz`

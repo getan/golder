@@ -18,11 +18,12 @@ var (
 )
 
 type larkHelperUpdate struct {
-	release extensions.LarkRelease
-	current string
-	phase   string // confirm, installing, failed, done
-	err     string
-	cancel  context.CancelFunc
+	release     extensions.LarkRelease
+	hostVersion string
+	current     string
+	phase       string // confirm, installing, failed, done
+	err         string
+	cancel      context.CancelFunc
 }
 
 type larkHelperDoneMsg struct {
@@ -105,7 +106,7 @@ func (m Model) confirmLarkHelperUpdate() (tea.Model, tea.Cmd) {
 	if !ok || !helper.UpdateAvailable {
 		return m.extensionDetail(extensions.LarkSourceRef)
 	}
-	m.larkUpdate = &larkHelperUpdate{release: helper.Release, current: helper.ActiveVersion, phase: "confirm"}
+	m.larkUpdate = &larkHelperUpdate{release: helper.Release, hostVersion: m.opts.Version, current: helper.ActiveVersion, phase: "confirm"}
 	info := []pickInfoLine{
 		{Label: "Helper", Value: helper.ActiveVersion + " → " + helper.Release.Version},
 		{Label: "Download", Value: helper.Release.ArchiveURL},
@@ -128,7 +129,9 @@ func (m Model) updateLarkHelperConfirmed() (tea.Model, tea.Cmd) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	u.cancel, u.phase, u.err = cancel, "installing", ""
-	version := u.release.Version
+	// InstallLarkRelease resolves the host release that carries the helper;
+	// u.release.Version is the helper's own version, not the host tag.
+	version := u.hostVersion
 	manager := m.opts.Extensions
 	m = m.showLarkUpdate()
 	return m, func() tea.Msg {

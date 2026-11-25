@@ -150,9 +150,12 @@ func TestLarkHelperUpdateKeepsOldHelperOnDownloadFailure(t *testing.T) {
 
 func TestLarkHelperUpdateRebindsAndDisablesSource(t *testing.T) {
 	m := larkUpdateModel(t)
+	m.opts.Version = "1.5.138"
 	stubLarkRelease(t, "1.1.0")
 	newPkg := larkUpdateFixturePackage(t, "1.1.0", "helper-v2")
-	stubLarkInstall(t, func(context.Context, string) (extensions.ManagedPackage, error) {
+	var installedVersion string
+	stubLarkInstall(t, func(_ context.Context, version string) (extensions.ManagedPackage, error) {
+		installedVersion = version
 		return newPkg, nil
 	})
 
@@ -166,6 +169,9 @@ func TestLarkHelperUpdateRebindsAndDisablesSource(t *testing.T) {
 
 	if m.larkUpdate.phase != "done" {
 		t.Fatalf("update did not finish: %+v", m.larkUpdate)
+	}
+	if installedVersion != "1.5.138" {
+		t.Fatalf("installer received %q, want the host version 1.5.138", installedVersion)
 	}
 	cfg, err := m.opts.Extensions.Config(extensions.LarkSourceRef)
 	if err != nil || cfg.Command != newPkg.Executable {
