@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
 )
@@ -48,6 +49,7 @@ type OpenAIDecoder struct {
 
 	responseID    string
 	responseModel string
+	legacyCallID  string
 	inputTokens   int
 	outputTokens  int
 	stopReason    string // mapped golder stop reason (empty until finish_reason)
@@ -84,6 +86,11 @@ type openaiChunk struct {
 			ReasoningContent string            `json:"reasoning_content"`
 			Reasoning        string            `json:"reasoning"`
 			ToolCalls        []openaiToolDelta `json:"tool_calls"`
+			// FunctionCall is the legacy single-call shape some gateways still
+			// emit when they were built against the pre-tool_calls API. Without
+			// this field the call is dropped while the reasoning block survives,
+			// which looks like a model that thought and then did nothing.
+			FunctionCall *openaiFunctionCallDelta `json:"function_call"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -107,6 +114,11 @@ type openaiToolDelta struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+}
+
+type openaiFunctionCallDelta struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // Decode turns one OpenAI SSE data payload into zero or more StreamEvents.
@@ -160,6 +172,10 @@ func (d *OpenAIDecoder) Decode(payload []byte) ([]StreamEvent, error) {
 			d.applyToolDelta(tc)
 			events = append(events, StreamToolCallEvent{Partial: d.partial()})
 		}
+		if fc := choice.Delta.FunctionCall; fc != nil && (fc.Name != "" || fc.Arguments != "") {
+			d.applyLegacyFunctionCall(fc)
+			events = append(events, StreamToolCallEvent{Partial: d.partial()})
+		}
 		if choice.FinishReason != "" {
 			d.stopReason = mapOpenAIFinishReason(choice.FinishReason)
 		}
@@ -179,6 +195,17 @@ func (d *OpenAIDecoder) Finish() ([]StreamEvent, error) {
 // applyToolDelta merges one tool-call fragment into the accumulated state.
 func (d *OpenAIDecoder) applyToolDelta(tc openaiToolDelta) {
 	call := d.toolCalls[tc.Index]
+	// Some gateways omit index (always 0) even for parallel calls. A fragment
+	// carrying a different non-empty id is a new call, not a continuation of the
+	// one already stored at this index.
+	if call != nil && tc.ID != "" && call.id != "" && tc.ID != call.id {
+		next := -1
+		for index := range d.toolCalls {
+			next = max(next, index)
+		}
+		tc.Index = next + 1
+		call = nil
+	}
 	if call == nil {
 		call = &openaiToolCall{}
 		d.toolCalls[tc.Index] = call
@@ -191,6 +218,30 @@ func (d *OpenAIDecoder) applyToolDelta(tc openaiToolDelta) {
 		call.name = tc.Function.Name
 	}
 	call.args.WriteString(tc.Function.Arguments)
+}
+
+// applyLegacyFunctionCall accumulates the pre-tool_calls function_call delta.
+// The wire carries no id, so one stable synthetic id is minted per response; a
+// per-response identity keeps the paired tool result unique in history.
+func (d *OpenAIDecoder) applyLegacyFunctionCall(fc *openaiFunctionCallDelta) {
+	if d.legacyCallID == "" {
+		d.legacyCallID = "call_legacy_" + d.responseID
+		if d.responseID == "" {
+			// The wire gave us nothing to key on; a per-response unique id keeps
+			// the paired tool result distinct in history.
+			d.legacyCallID = fmt.Sprintf("call_legacy_%d", time.Now().UnixNano())
+		}
+	}
+	call := d.toolCalls[0]
+	if call == nil || (call.id != "" && call.id != d.legacyCallID) {
+		call = &openaiToolCall{id: d.legacyCallID}
+		d.toolCalls[0] = call
+		d.toolOrder = append(d.toolOrder, 0)
+	}
+	if fc.Name != "" {
+		call.name = fc.Name
+	}
+	call.args.WriteString(fc.Arguments)
 }
 
 // finishDone builds the terminal assistant message and marks the decoder done.

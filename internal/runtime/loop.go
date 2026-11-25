@@ -332,6 +332,32 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 		startIdx = len(agentCtx.Messages)
 	}
 
+	// A stall is usually a model that spent its whole response reasoning. Asking
+	// it again at the same (often "max") effort tends to reproduce the same
+	// reasoning-only turn, which is exactly the opencode-go / deepseek loop.
+	// Lower the effort for the continuation and restore the user's level as soon
+	// as the model acts or answers, so this is a recovery step, not a settings
+	// change.
+	originalThinking := cfg.ThinkingLevel
+	stallThinkingLow := false
+	lowerThinkingForStall := func() {
+		if stallThinkingLow {
+			return
+		}
+		if cfg.ThinkingLevel == "" || cfg.ThinkingLevel == agentcore.ThinkingOff || cfg.ThinkingLevel == agentcore.ThinkingMinimal {
+			return
+		}
+		stallThinkingLow = true
+		cfg.ThinkingLevel = agentcore.ThinkingMinimal
+	}
+	restoreThinking := func() {
+		if !stallThinkingLow {
+			return
+		}
+		cfg.ThinkingLevel = originalThinking
+		stallThinkingLow = false
+	}
+
 	for { // outer loop: pending / follow-up messages
 		// stalls counts consecutive turns that produced nothing the person can
 		// act on (no visible text, no tool call, reasoning only). It is the state
@@ -410,9 +436,11 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 					if stalls <= stallContinueMax {
 						agentCtx.Messages = append(agentCtx.Messages, stallContinuation())
 						checkpoint(false)
+						lowerThinkingForStall()
 					}
 				} else {
 					stalls = 0
+					restoreThinking()
 				}
 				ev := agentcore.TurnEndEvent{Message: assistant}
 				if stall > 0 {
@@ -438,6 +466,7 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 				break // exit inner loop → consult follow-up messages
 			}
 			stalls = 0 // the model acted: whatever it was stuck on, it is not stuck now
+			restoreThinking()
 
 			// Inject the run-level emitter into the context so tools (notably the
 			// generic task tool) can retrieve it via ProgressEmitterFromContext and
@@ -897,9 +926,10 @@ func stallContinuation() agentcore.UserMessage {
 	return agentcore.UserMessage{
 		RoleField: agentcore.RoleUser,
 		Content: agentcore.ContentList{agentcore.NewTextContent(
-			"Continue exactly where you stopped. Your previous turn contained only reasoning — " +
-				"no answer and no tool call — so nothing reached the user. " +
-				"Answer the request, or make the next tool call, now.")},
+			"Continue the current task. Your previous turn contained only reasoning — no answer and no " +
+				"tool call — so nothing reached the user. Do not restate the plan or re-read anything you " +
+				"already read. Use the latest tool result and either answer now or make the single next " +
+				"tool call. If something blocks you, name it and stop.")},
 	}
 }
 

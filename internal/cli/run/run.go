@@ -509,6 +509,7 @@ func TodoReminders(tools []agentcore.AgentTool) *runtime.ReminderRegistry {
 	if len(tools) > 0 {
 		providers = append(providers,
 			&runtime.SearchRepeatReminderProvider{},
+			&runtime.RepeatCallReminderProvider{},
 			&runtime.BudgetReminderProvider{},
 		)
 	}

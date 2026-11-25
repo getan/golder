@@ -23,8 +23,10 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -399,6 +401,83 @@ func seenSearchURL(q string, pages []string) bool {
 // rephrased repeats still match.
 func normalizeSearchQuery(q string) string {
 	return strings.Join(strings.Fields(strings.ToLower(q)), " ")
+}
+
+// RepeatCallReminderProvider is the general loop guard. It watches the trailing
+// run of assistant tool calls and fires when the same call — same tool name and
+// same normalized arguments — is issued several times in a row. The reminder is
+// ephemeral (injected only into the next request) and deliberately does not block
+// execution: a legitimate retry after an edit still runs, but the model is told
+// that the repeat cannot produce new information and the wording hardens as the
+// run continues. A different call in between resets the count.
+type RepeatCallReminderProvider struct{}
+
+const (
+	// repeatCallWarnAt is the first count at which the reminder fires. Three in a
+	// row is already a loop: the first call returned a result, the second added
+	// nothing, and the third is the model retrying instead of reasoning about it.
+	repeatCallWarnAt = 3
+	// repeatCallStopAt hardens the wording for a run that keeps going anyway.
+	repeatCallStopAt = 5
+)
+
+// Name implements ReminderProvider.
+func (p *RepeatCallReminderProvider) Name() string { return "repeat-call" }
+
+// Reminder implements ReminderProvider.
+func (p *RepeatCallReminderProvider) Reminder(_ context.Context, msgs agentcore.MessageList) (string, bool) {
+	var calls []agentcore.ToolCallContent
+	for _, m := range msgs {
+		am, ok := m.(agentcore.AssistantMessage)
+		if !ok {
+			continue
+		}
+		calls = append(calls, am.ToolCalls()...)
+	}
+	if len(calls) < repeatCallWarnAt {
+		return "", false
+	}
+	last := calls[len(calls)-1]
+	signature := repeatCallSignature(last)
+	if signature == "" {
+		return "", false
+	}
+	count := 1
+	for i := len(calls) - 2; i >= 0; i-- {
+		if repeatCallSignature(calls[i]) != signature {
+			break
+		}
+		count++
+	}
+	if count < repeatCallWarnAt {
+		return "", false
+	}
+	if count >= repeatCallStopAt {
+		return fmt.Sprintf("Stop repeating: tool %q has now been called %d times in a row with identical "+
+			"arguments. The result cannot have changed. Do not call it again in this run: act on the result "+
+			"already returned, change the call, or state the blocker and stop.", last.Name, count), true
+	}
+	return fmt.Sprintf("The last %d tool calls were identical: tool %q with the same arguments. A repeat is "+
+		"not new information. Use the result already returned, change the call, or report the blocker instead "+
+		"of calling it again.", count, last.Name), true
+}
+
+// repeatCallSignature identifies a call for loop detection. Arguments are
+// compacted so formatting-only differences still match; an empty argument object
+// is the common zero-argument shape. Server calls use the same encoding.
+func repeatCallSignature(c agentcore.ToolCallContent) string {
+	if c.Name == "" {
+		return ""
+	}
+	args := bytes.TrimSpace(c.Arguments)
+	var compact bytes.Buffer
+	if len(args) > 0 && json.Compact(&compact, args) == nil {
+		args = compact.Bytes()
+	}
+	if len(args) == 0 {
+		args = []byte("{}")
+	}
+	return c.Name + "\x00" + string(args)
 }
 
 type TodoReminderProvider struct {

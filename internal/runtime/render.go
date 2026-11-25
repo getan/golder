@@ -56,7 +56,8 @@ func StallNote(s TurnStall) string {
 			"carrying on automatically (attempt %d of %d).", s.Count, s.Limit)
 	}
 	return fmt.Sprintf("note: the model ended %d turns in a row with reasoning only — no answer and no tool call; "+
-		"stopping here. Send another message to carry on.", s.Count)
+		"stopping here. The harness already retried at reduced reasoning effort; if this repeats, lower the "+
+		"thinking level or switch providers, or send another message to carry on.", s.Count)
 }
 
 // DrainStream consumes stream to completion, invoking h's callbacks, and returns

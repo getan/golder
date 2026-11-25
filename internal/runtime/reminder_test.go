@@ -339,3 +339,55 @@ func TestSearchRepeatReminderFiresOnBudget(t *testing.T) {
 		t.Errorf("reminder body = %q, want synthesize steering", body)
 	}
 }
+
+func TestRepeatCallReminder(t *testing.T) {
+	call := func(id, args string) agentcore.ToolCallContent {
+		return agentcore.NewToolCallContent(id, "bash", json.RawMessage(args))
+	}
+	withCalls := func(calls ...agentcore.ToolCallContent) agentcore.MessageList {
+		msgs := agentcore.MessageList{agentcore.UserMessage{RoleField: agentcore.RoleUser}}
+		for _, c := range calls {
+			msgs = append(msgs, agentcore.AssistantMessage{
+				RoleField: agentcore.RoleAssistant,
+				Content:   agentcore.ContentList{c},
+			})
+		}
+		return msgs
+	}
+	p := &RepeatCallReminderProvider{}
+
+	// Two is not yet a loop.
+	if _, ok := p.Reminder(context.Background(), withCalls(call("1", `{"command":"go test"}`), call("2", `{"command":"go test"}`))); ok {
+		t.Error("two identical calls should not fire")
+	}
+
+	// Three identical calls fire, even when only JSON formatting differs.
+	body, ok := p.Reminder(context.Background(), withCalls(
+		call("1", `{"command":"go test"}`),
+		call("2", `{"command": "go test"}`),
+		call("3", `{"command":"go test"}`),
+	))
+	if !ok {
+		t.Fatal("three identical calls should fire")
+	}
+	if !strings.Contains(body, "identical") || !strings.Contains(body, "bash") {
+		t.Errorf("reminder body = %q, want the repeated tool named", body)
+	}
+
+	// A different call resets the trailing run.
+	if _, ok := p.Reminder(context.Background(), withCalls(
+		call("1", `{"command":"go test"}`),
+		call("2", `{"command":"go test"}`),
+		agentcore.NewToolCallContent("3", "read", json.RawMessage(`{"path":"a.go"}`)),
+	)); ok {
+		t.Error("a different call should reset the run")
+	}
+
+	// Five repeats harden the wording and count them.
+	body, ok = p.Reminder(context.Background(), withCalls(
+		call("1", `{}`), call("2", `{}`), call("3", `{}`), call("4", `{}`), call("5", `{}`),
+	))
+	if !ok || !strings.Contains(body, "Stop repeating") || !strings.Contains(body, "5 times") {
+		t.Errorf("escalated reminder = %q, ok=%v", body, ok)
+	}
+}

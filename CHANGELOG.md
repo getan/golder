@@ -19,6 +19,22 @@ interactive REPL/TUI.
   report a credential as invalid without an actual 401/403 result, and blocked
   risk-judge results now state that the decision is one-shot.
 
+### Runtime loop
+- When a model ends a turn with reasoning only, the automatic continuation now
+  drops to minimal thinking effort and restores the configured level as soon as
+  the model acts or answers. This targets the opencode-go / DeepSeek
+  reasoning-only turns reported upstream (anomalyco/opencode#48419 and #40176);
+  the official DeepSeek API does not reproduce them. The stopped note names
+  lowering the thinking level or switching providers as the recovery options.
+- Add a general repeat-call guard: three identical trailing tool calls inject
+  an ephemeral reminder, and five harden it into an explicit stop. A different
+  call resets the run.
+
+### Provider
+- Accept the legacy Chat Completions `delta.function_call` shape, and treat a
+  repeated tool-call index carrying a new id as a new call. Gateways that omit
+  `index` or use the pre-tool_calls shape no longer lose or merge calls.
+
 ### GUI
 - Replace the transcript's screen-anchor reveal with one scroll offset. Row
   height measurements adjust `scroll.Y` directly, and follow remains one

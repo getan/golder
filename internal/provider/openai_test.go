@@ -74,6 +74,53 @@ func TestOpenAIDecoderToolCallStream(t *testing.T) {
 	}
 }
 
+// TestOpenAIDecoderLegacyFunctionCall covers the pre-tool_calls shape: a
+// gateway that streams the call under delta.function_call. Dropping it leaves
+// the reasoning block as the whole turn, which the loop then treats as a stall.
+func TestOpenAIDecoderLegacyFunctionCall(t *testing.T) {
+	body := `data: {"id":"c-legacy","model":"deepseek","choices":[{"delta":{"reasoning_content":"I should check the file."}}]}
+
+data: {"id":"c-legacy","model":"deepseek","choices":[{"delta":{"function_call":{"name":"read","arguments":"{\"path\":"}}}]}
+
+data: {"id":"c-legacy","model":"deepseek","choices":[{"delta":{"function_call":{"arguments":"\"a.txt\"}"}}}]}
+
+data: {"id":"c-legacy","model":"deepseek","choices":[{"delta":{},"finish_reason":"function_call"}]}
+
+data: [DONE]
+`
+	dec := NewOpenAIDecoder()
+	_, final := feedSSE(t, dec, body)
+	calls := final.ToolCalls()
+	if len(calls) != 1 || calls[0].Name != "read" {
+		t.Fatalf("legacy function_call was lost: %+v", calls)
+	}
+	if calls[0].ID == "" {
+		t.Error("legacy call must carry a synthetic id for tool-result pairing")
+	}
+	if string(calls[0].Arguments) != `{"path":"a.txt"}` {
+		t.Errorf("legacy arguments = %s", calls[0].Arguments)
+	}
+}
+
+// TestOpenAIDecoderRepeatedIndexStartsNewCall: a gateway that always sends
+// index 0 for parallel calls must not merge them into one.
+func TestOpenAIDecoderRepeatedIndexStartsNewCall(t *testing.T) {
+	body := `data: {"id":"c-par","model":"m","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_a","function":{"name":"read","arguments":"{}"}}]}}]}
+
+data: {"id":"c-par","model":"m","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_b","function":{"name":"ls","arguments":"{}"}}]}}]}
+
+data: {"id":"c-par","model":"m","choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+`
+	dec := NewOpenAIDecoder()
+	_, final := feedSSE(t, dec, body)
+	calls := final.ToolCalls()
+	if len(calls) != 2 || calls[0].ID != "call_a" || calls[1].ID != "call_b" {
+		t.Fatalf("parallel calls with a repeated index merged: %+v", calls)
+	}
+}
+
 func TestOpenAIDecoderTextOnlyStop(t *testing.T) {
 	body := `data: {"id":"c1","model":"gpt-4o","choices":[{"delta":{"content":"Hello"}}]}
 

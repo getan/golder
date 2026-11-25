@@ -213,4 +213,33 @@ func TestStallNoteNamesTheOutcome(t *testing.T) {
 	if !strings.Contains(stopped, "stopping here") || !strings.Contains(stopped, "3 turns in a row") {
 		t.Errorf("stopped note = %q", stopped)
 	}
+	if !strings.Contains(stopped, "reduced reasoning effort") || !strings.Contains(stopped, "switch providers") {
+		t.Errorf("stopped note should name the recovery options, got %q", stopped)
+	}
+}
+
+// TestStallLowersThinkingEffort pins the recovery for a model that spends every
+// response reasoning. A max-effort model that stalls is re-asked at minimal
+// effort; once it answers, the user's configured level is restored for the next
+// turn. Without this, the continuation reproduces the same reasoning-only turn.
+func TestStallLowersThinkingEffort(t *testing.T) {
+	p := &fauxProvider{
+		name: "faux",
+		turns: []fauxTurn{
+			thinkingTurn("let me think about this at length"),
+			textTurn("here is the answer"),
+			toolCallTurn("call-1", "bash", `{"command":"ls"}`),
+			textTurn("done"),
+		},
+	}
+	cfg := newFauxRunCfg(p)
+	cfg.ThinkingLevel = agentcore.ThinkingMax
+	stallRun(t, cfg)
+
+	if got := p.requestAt(0).Config.ThinkingLevel; got != agentcore.ThinkingMax {
+		t.Errorf("first request thinking = %q, want the configured %q", got, agentcore.ThinkingMax)
+	}
+	if got := p.requestAt(1).Config.ThinkingLevel; got != agentcore.ThinkingMinimal {
+		t.Errorf("continuation thinking = %q, want %q", got, agentcore.ThinkingMinimal)
+	}
 }
