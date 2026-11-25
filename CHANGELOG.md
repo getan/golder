@@ -51,6 +51,12 @@ interactive REPL/TUI.
   `mcp:docx` source and requires the normal explicit approval before enabling.
 
 ### GUI
+- Preserve MyGo's wheel glide when the transcript corrects its offset for
+  measured row heights, eliminating the scroll hitch caused by layout
+  anchoring cancelling the wheel. The MyGo fork API is `ScrollState.AnchorBy`.
+- Clear transcript card open state when switching to a historical session and
+  close finished Explore groups at run end, so history does not inherit an
+  expanded live-session card.
 - Collapse completed tool cards at the end of a run and prefetch two viewport
   pages of transcript row heights, so command-card-heavy sessions do not
   remeasure cards while the first scroll is already in progress.

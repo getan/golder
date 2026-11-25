@@ -157,6 +157,34 @@ func TestRunEndCollapsesFinishedToolCards(t *testing.T) {
 	}
 }
 
+func TestHistoricalSnapshotDoesNotInheritOpenCards(t *testing.T) {
+	a := testApp()
+	a.status.SessionID = "live"
+	a.toolOpen["old-tool"] = true
+	a.thinkingOpen["old-thinking"] = true
+	a.applySnapshot(appsession.Snapshot{
+		Status: appsession.Status{SessionID: "history"},
+		Items:  []appsession.Item{{ID: "history-message", Kind: appsession.ItemAssistant, Text: "old", Done: true}},
+	})
+	if a.toolOpen["old-tool"] || a.thinkingOpen["old-thinking"] {
+		t.Fatalf("historical snapshot inherited open cards: tool=%v thinking=%v", a.toolOpen, a.thinkingOpen)
+	}
+}
+
+func TestRunEndCollapsesFinishedExploreGroup(t *testing.T) {
+	a := testApp()
+	first := appsession.Item{ID: "read-1", Kind: appsession.ItemTool, Done: true, Tool: &appsession.ToolState{ID: "read-1", Name: "read"}}
+	second := appsession.Item{ID: "read-2", Kind: appsession.ItemTool, Done: true, Tool: &appsession.ToolState{ID: "read-2", Name: "read"}}
+	a.items = []appsession.Item{first, second}
+	a.index = map[string]int{"read-1": 0, "read-2": 1}
+	a.transcriptRowsDirty = true
+	a.toolOpen["explore:read-1"] = true
+	a.applyEvent(appsession.Event{Kind: appsession.EventRunEnd})
+	if a.toolOpen["explore:read-1"] {
+		t.Fatal("finished explore group stayed open after the run ended")
+	}
+}
+
 func TestPendingApprovalWithoutToolUsesStablePlaceholder(t *testing.T) {
 	a := testApp()
 	a.pending = []appsession.ApprovalView{{ID: "approval", RunID: "run-1", ToolCallID: "call-1", Tool: "bash", Summary: "echo hello"}}

@@ -418,6 +418,14 @@ func (a *App) applySessionEvent(message appsession.SessionEvent) {
 func (a *App) applySnapshot(snap appsession.Snapshot) {
 	previousProject := a.project
 	previousSession := a.status.SessionID
+	if previousSession != "" && previousSession != snap.SessionID {
+		// A historical session must not inherit the open cards of the live
+		// session it replaced. activateSession also clears these maps; keeping
+		// the reset here covers snapshots applied by other paths.
+		a.thinkingOpen = map[string]bool{}
+		a.toolOpen = map[string]bool{}
+		a.approvalOpen = map[string]bool{}
+	}
 	var tail appsession.Item
 	if previousSession != "" && previousSession == snap.SessionID {
 		tail = transcriptTail(a.items)
@@ -563,6 +571,22 @@ func (a *App) collapseFinishedToolCards() {
 	for _, it := range a.items {
 		if it.Kind == appsession.ItemTool && it.Tool != nil && it.Done {
 			a.toolOpen[it.ID] = false
+		}
+	}
+	for _, row := range a.projectedTranscriptRows() {
+		if len(row.members) == 0 {
+			continue
+		}
+		done := true
+		for _, member := range row.members {
+			item, ok := a.transcriptRowItem(member)
+			if !ok || item.Tool == nil || !item.Done {
+				done = false
+				break
+			}
+		}
+		if done {
+			a.toolOpen["explore:"+row.key] = false
 		}
 	}
 	if a.list != nil {

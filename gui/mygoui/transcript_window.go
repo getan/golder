@@ -133,9 +133,11 @@ func (s *transcriptWindow) copyText(parts []ui.SelectedText) (string, bool) {
 
 func (s *transcriptWindow) Visible() (int, int) { return s.first, s.last }
 
-// setScrollOffset is the only internal writer of scroll.Y. Native scrolling is
+// setScrollOffset is the only absolute writer of scroll.Y. Native scrolling is
 // an input source; sync, measurement and follow all reconcile through this one
-// setter so there is never a second offset to fight over.
+// setter so there is never a second offset to fight over. Layout anchoring uses
+// ScrollState.AnchorBy, which adjusts the offset without taking over from an
+// active wheel glide.
 func (s *transcriptWindow) setScrollOffset(y float32) {
 	s.scroll.Y = y
 }
@@ -293,7 +295,7 @@ func (s *transcriptWindow) measure(i int, h float32) bool {
 	// selection; later corrections and ordinary scrolling keep the anchor.
 	if s.anchorValid && !s.follow && (!s.selecting || known) {
 		if anchor, ok := s.index[s.anchorKey]; ok && i < anchor {
-			s.setScrollOffset(max(s.scroll.Y+float32(delta), 0))
+			s.scroll.AnchorBy(float32(delta))
 		}
 	}
 	return true
