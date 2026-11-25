@@ -266,6 +266,10 @@ func TestTranscriptDoesNotCountOutputInsideCollapsedExploreGroup(t *testing.T) {
 func TestTranscriptWheelScrollPausesFollowing(t *testing.T) {
 	a := followTestApp()
 	tt := ui.NewTester(a.view, 1200, 500)
+	// A real app has rendered the follow-mode frame before the user can wheel.
+	// Initialize the scroll viewport and row geometry so this test exercises the
+	// wheel path rather than an unrendered bottom sentinel.
+	tt.Frame()
 	tt.Wheel(700, 200, 0, -400)
 	for range 20 {
 		tt.Advance(50 * time.Millisecond)
