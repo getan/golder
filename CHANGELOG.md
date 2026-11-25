@@ -24,6 +24,13 @@ interactive REPL/TUI.
   and an anchor far beyond the real content.
 
 ### Lark extension
+- Add GitHub mirror fallback to the TUI helper download, sharing the
+  `GOLDER_MIRROR` prefix list with `golder update` and install.sh. Checksums are
+  fetched from GitHub direct first; if that fails, mirror copies must agree on
+  the helper digest before the archive is accepted, and every archive is still
+  SHA-256 verified. The TUI downloader uses Go's default transport, so
+  `HTTPS_PROXY`/`HTTP_PROXY` are honored; it does not read the GUI `/proxy`
+  setting.
 - Fix the TUI helper update to install from the running Golder host release
   (`v1.5.138`) instead of passing the helper's own version (`1.5.70`) to
   `InstallLarkRelease`, which looked up a nonexistent host release and reported

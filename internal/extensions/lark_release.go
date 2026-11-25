@@ -20,6 +20,7 @@ import (
 	"time"
 
 	larkversion "github.com/getan/golder/extension/plugins/lark/version"
+	"github.com/getan/golder/internal/githubmirror"
 )
 
 var larkReleaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -63,17 +64,12 @@ func InstallLarkRelease(ctx context.Context, version string) (ManagedPackage, er
 		return ManagedPackage{}, err
 	}
 	client := &http.Client{Timeout: 5 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 || req.URL.Scheme != "https" || !trustedReleaseHost(req.URL.Hostname()) {
+		if len(via) >= 10 || req.URL.Scheme != "https" || req.URL.User != nil {
 			return errors.New("untrusted release redirect")
 		}
 		return nil
 	}}
 	return installLarkRelease(ctx, release, client)
-}
-
-func trustedReleaseHost(host string) bool {
-	host = strings.ToLower(host)
-	return host == "github.com" || host == "objects.githubusercontent.com" || host == "release-assets.githubusercontent.com" || host == "github-releases.githubusercontent.com"
 }
 
 func releaseDownload(ctx context.Context, client *http.Client, rawURL string, max int64) ([]byte, error) {
@@ -100,28 +96,107 @@ func releaseDownload(ctx context.Context, client *http.Client, rawURL string, ma
 	return body, nil
 }
 
-func installLarkRelease(ctx context.Context, release LarkRelease, client *http.Client) (ManagedPackage, error) {
-	checksums, err := releaseDownload(ctx, client, release.ChecksumURL, 2<<20)
-	if err != nil {
-		return ManagedPackage{}, err
-	}
+func larkChecksumFor(checksums []byte, archive string) (string, error) {
 	want := ""
 	for _, line := range strings.Split(string(checksums), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == release.Archive {
+		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == archive {
 			if want != "" {
-				return ManagedPackage{}, errors.New("duplicate Lark release checksum")
+				return "", errors.New("duplicate Lark release checksum")
 			}
 			want = strings.ToLower(fields[0])
 		}
 	}
 	if len(want) != sha256.Size*2 {
-		return ManagedPackage{}, errors.New("matching Lark release checksum was not found")
+		return "", errors.New("matching Lark release checksum was not found")
 	}
 	if _, err := hex.DecodeString(want); err != nil {
-		return ManagedPackage{}, errors.New("invalid Lark release checksum")
+		return "", errors.New("invalid Lark release checksum")
 	}
-	archive, err := releaseDownload(ctx, client, release.ArchiveURL, 128<<20)
+	return want, nil
+}
+
+func larkDownloadAttempt(ctx context.Context, client *http.Client, rawURL string, max int64, timeout time.Duration) ([]byte, error) {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	return releaseDownload(ctx, client, rawURL, max)
+}
+
+// fetchLarkChecksum tries GitHub direct first (the trust anchor). If it is
+// unreachable, mirror copies are cross-checked: they must all agree on the
+// archive digest, so one mirror cannot vouch for bytes it poisoned. A single
+// reachable mirror is accepted, matching install.sh's documented tradeoff.
+func fetchLarkChecksum(ctx context.Context, client *http.Client, release LarkRelease) (string, error) {
+	sources := githubmirror.Apply(release.ChecksumURL, githubmirror.Prefixes())
+	directErr := error(nil)
+	if body, err := larkDownloadAttempt(ctx, client, sources[0], 2<<20, 45*time.Second); err == nil {
+		if want, err := larkChecksumFor(body, release.Archive); err == nil {
+			return want, nil
+		} else {
+			directErr = err
+		}
+	} else {
+		directErr = err
+	}
+	var candidates []string
+	for _, src := range sources[1:] {
+		body, err := larkDownloadAttempt(ctx, client, src, 2<<20, 45*time.Second)
+		if err != nil {
+			continue
+		}
+		want, err := larkChecksumFor(body, release.Archive)
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, want)
+	}
+	if len(candidates) == 0 {
+		if directErr == nil {
+			directErr = errors.New("no mirror served a matching checksum")
+		}
+		return "", fmt.Errorf("Lark release checksum unavailable from GitHub or mirrors: %w", directErr)
+	}
+	for _, digest := range candidates[1:] {
+		if digest != candidates[0] {
+			return "", fmt.Errorf("Lark release checksum mirrors disagree for %s; possible tampering", release.Archive)
+		}
+	}
+	return candidates[0], nil
+}
+
+// fetchLarkArchive tries direct GitHub, then each configured mirror. The
+// checksum is already trusted by fetchLarkChecksum, so a mirror serving a
+// stale or corrupt archive simply fails over.
+func fetchLarkArchive(ctx context.Context, client *http.Client, release LarkRelease, want string) ([]byte, error) {
+	var last error
+	for _, src := range githubmirror.Apply(release.ArchiveURL, githubmirror.Prefixes()) {
+		archive, err := larkDownloadAttempt(ctx, client, src, 128<<20, 90*time.Second)
+		if err != nil {
+			last = err
+			continue
+		}
+		digest := sha256.Sum256(archive)
+		if hex.EncodeToString(digest[:]) != want {
+			last = errors.New("Lark release archive checksum mismatch")
+			continue
+		}
+		return archive, nil
+	}
+	if last == nil {
+		last = errors.New("Lark release download failed")
+	}
+	return nil, last
+}
+
+func installLarkRelease(ctx context.Context, release LarkRelease, client *http.Client) (ManagedPackage, error) {
+	want, err := fetchLarkChecksum(ctx, client, release)
+	if err != nil {
+		return ManagedPackage{}, err
+	}
+	archive, err := fetchLarkArchive(ctx, client, release, want)
 	if err != nil {
 		return ManagedPackage{}, err
 	}

@@ -31,6 +31,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/getan/golder/internal/githubmirror"
 )
 
 // checksumsFile is the goreleaser checksums artifact name (see .goreleaser.yaml).
@@ -38,7 +40,7 @@ const checksumsFile = "checksums.txt"
 
 // mirrorEnv overrides the built-in mirror list: a whitespace-separated list of
 // URL prefixes, or "off"/"none" to disable mirror fallback (GitHub only).
-const mirrorEnv = "GOLDER_MIRROR"
+const mirrorEnv = githubmirror.Env
 
 // defaultMinRate is the average throughput (bytes/sec) a download attempt
 // must keep once it has started delivering; below it the attempt is aborted
@@ -68,25 +70,12 @@ const defaultDownloadTimeout = 5 * time.Minute
 // only accelerate the transfer: the archive is always verified against
 // checksums.txt before it can replace the binary, and GOLDER_MIRROR=off
 // disables them entirely.
-var defaultMirrorPrefixes = []string{
-	"https://ghfast.top/",
-	"https://ghproxy.net/",
-	"https://gh-proxy.com/",
-	"https://gh.zwy.one/",
-}
+var defaultMirrorPrefixes = githubmirror.Defaults
 
 // mirrorPrefixes resolves the mirror list: GOLDER_MIRROR when set (a
 // whitespace-separated prefix list, or off/none), else the built-in defaults.
 func mirrorPrefixes() []string {
-	raw := strings.TrimSpace(os.Getenv(mirrorEnv))
-	switch raw {
-	case "":
-		return defaultMirrorPrefixes
-	case "off", "none":
-		return nil
-	default:
-		return strings.Fields(raw)
-	}
+	return githubmirror.Prefixes()
 }
 
 // Updater performs a self-replacement. Its fields are seams for testing;
@@ -348,16 +337,11 @@ func shortDigest(d string) string {
 
 // mirrorURLs applies each mirror prefix to an original GitHub URL.
 func (u *Updater) mirrorURLs(original string) []string {
-	if len(u.Mirrors) == 0 {
+	urls := githubmirror.Apply(original, u.Mirrors)
+	if len(urls) <= 1 {
 		return nil
 	}
-	urls := make([]string, 0, len(u.Mirrors))
-	for _, m := range u.Mirrors {
-		if m != "" {
-			urls = append(urls, m+original)
-		}
-	}
-	return urls
+	return urls[1:]
 }
 
 // sourceHost returns the host of a download source for user-facing notices,
