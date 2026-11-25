@@ -2,6 +2,7 @@ package mygoui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,23 @@ func TestTranscriptFollowSurvivesIncreasedScrollRange(t *testing.T) {
 	s.plan(400, nil)
 	if !s.follow {
 		t.Fatal("content growth was mistaken for a user scroll")
+	}
+}
+
+func TestTranscriptLeavingFollowClampsSentinelOffset(t *testing.T) {
+	s := &transcriptWindow{}
+	s.sync([]transcriptRow{{key: "a"}, {key: "b"}, {key: "c"}}, false)
+	s.started, s.follow, s.upScrollPending = true, false, true
+	s.scroll.Y, s.scroll.MaxY = math.MaxFloat32, 500
+	s.plan(300, nil)
+	if s.scroll.Y == math.MaxFloat32 || s.scroll.Y > s.scroll.MaxY {
+		t.Fatalf("follow sentinel leaked out of follow-mode: %v", s.scroll.Y)
+	}
+	if s.follow {
+		t.Fatal("leaving follow-mode was undone by the clamped bottom offset")
+	}
+	if s.first < 0 || s.last < s.first || s.last >= len(s.keys) {
+		t.Fatalf("invalid range after leaving follow: %d..%d", s.first, s.last)
 	}
 }
 

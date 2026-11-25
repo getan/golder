@@ -308,6 +308,12 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 	if viewport <= 0 {
 		viewport = 600
 	}
+	// Leaving follow-mode starts from the previous frame's bottom offset. The
+	// sentinel MaxFloat32 is only meaningful while following; using it here
+	// would compute rows and an anchor far past the real content for one frame.
+	if !s.follow && s.scroll.Y > s.scroll.MaxY {
+		s.scroll.Y = s.scroll.MaxY
+	}
 	if s.scroll.Y < s.scroll.MaxY-1 {
 		s.upScrollPending = false
 	}

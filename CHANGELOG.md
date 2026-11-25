@@ -19,6 +19,9 @@ interactive REPL/TUI.
   after layout but before paint, so the correction does not wait for the next
   frame. A pointer-held text selection still leaves its first measurement to the
   native selection, and later scroll corrections continue.
+- Clamp the `MaxFloat32` follow sentinel to the previous frame's bottom when the
+  first upward scroll leaves follow-mode, so that frame does not compute rows
+  and an anchor far beyond the real content.
 
 ### Lark extension
 - Fix the TUI helper update to install from the running Golder host release
