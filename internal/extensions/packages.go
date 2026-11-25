@@ -27,34 +27,62 @@ type PackageView struct {
 // shipped-but-unconfigured package discoverable without turning discovery into
 // installation or source authority.
 func (m *Manager) PackageViews() []PackageView {
-	ref := SourceRef{Kind: "mcp", ID: "lark"}
-	p := PackageView{
-		ID: "lark", Name: "Lark + Project", Type: "MCP package", Source: ref,
+	larkRef := SourceRef{Kind: "mcp", ID: "lark"}
+	lark := PackageView{
+		ID: "lark", Name: "Lark + Project", Type: "MCP package", Source: larkRef,
 		Description: "Feishu/Lark documents, messages, Sheets, Base, and Project work items through user-authorized native CLIs.",
 		State:       "not installed", Docs: "https://github.com/getan/golder/blob/master/docs/lark-cli-plugin.md",
 		NextAction: "Install the matching golder-lark release package and the official native CLIs explicitly; nothing is auto-installed.",
 	}
 	if installed, ok := InstalledManagedPackage("lark"); ok {
-		p.State, p.Executable, p.Version = "installed · not configured", installed.Executable, installed.Version
-		p.NextAction = "Configure the official native CLIs and application, then explicitly approve and authorize the package."
+		lark.State, lark.Executable, lark.Version = "installed · not configured", installed.Executable, installed.Version
+		lark.NextAction = "Configure the official native CLIs and application, then explicitly approve and authorize the package."
 	}
 	for _, source := range m.List() {
-		if source.Ref == ref {
-			p.Configured, p.State = true, source.State
+		if source.Ref == larkRef {
+			lark.Configured, lark.State = true, source.State
 			if source.Version != "" {
-				p.Version = source.Version
+				lark.Version = source.Version
 			}
-			p.NextAction = "Open the MCP source above to review, enable, authorize, or diagnose it."
-			return []PackageView{p}
+			lark.NextAction = "Open the MCP source above to review, enable, authorize, or diagnose it."
+			break
 		}
 	}
-	if p.Executable == "" {
+	if lark.Executable == "" {
 		if path := packageExecutable("golder-lark"); path != "" {
-			p.State, p.Executable = "installed · not configured", path
-			p.NextAction = "Run golder-lark print-config with absolute native CLI paths, merge the disabled mcp:lark table into config.toml, then review and enable it."
+			lark.State, lark.Executable = "installed · not configured", path
+			lark.NextAction = "Run golder-lark print-config with absolute native CLI paths, merge the disabled mcp:lark table into config.toml, then review and enable it."
 		}
 	}
-	return []PackageView{p}
+
+	docxRef := SourceRef{Kind: "mcp", ID: "docx"}
+	docx := PackageView{
+		ID: "docx", Name: "DOCX", Type: "MCP package", Source: docxRef,
+		Description: "Read, create and edit Word .docx files with headings, tables and images, confined to the workspace.",
+		State:       "not installed", Docs: "https://github.com/getan/golder/blob/master/extension/plugins/docx/README.md",
+		NextAction: "Install the matching golder-docx release package, then approve and enable it; no application credentials are required.",
+	}
+	if installed, ok := InstalledManagedPackage("docx"); ok {
+		docx.State, docx.Executable, docx.Version = "installed · not configured", installed.Executable, installed.Version
+		docx.NextAction = "Approve and enable the workspace-confined DOCX MCP source."
+	}
+	for _, source := range m.List() {
+		if source.Ref == docxRef {
+			docx.Configured, docx.State = true, source.State
+			if source.Version != "" {
+				docx.Version = source.Version
+			}
+			docx.NextAction = "Open the MCP source above to review, enable, or diagnose it."
+			break
+		}
+	}
+	if docx.Executable == "" {
+		if path := packageExecutable("golder-docx"); path != "" {
+			docx.State, docx.Executable = "installed · not configured", path
+			docx.NextAction = "Merge the disabled mcp:docx source from the plugin README into config.toml, then review and enable it."
+		}
+	}
+	return []PackageView{lark, docx}
 }
 
 func packageExecutable(name string) string {

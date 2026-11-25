@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	docxversion "github.com/getan/golder/extension/plugins/docx/version"
 	larkversion "github.com/getan/golder/extension/plugins/lark/version"
 	setupevent "github.com/getan/golder/extension/setup"
 	"github.com/getan/golder/internal/extensions"
@@ -14,6 +15,7 @@ import (
 )
 
 var larkSourceRef = extensions.SourceRef{Kind: "mcp", ID: "lark"}
+var docxSourceRef = extensions.SourceRef{Kind: "mcp", ID: "docx"}
 
 var discoverOfficialCLI = extensions.DiscoverOfficialCLI
 var installOfficialCLI = func(ctx context.Context, kind extensions.OfficialCLIKind, progress func(extensions.OfficialCLIInstallProgress)) (extensions.OfficialCLI, error) {
@@ -61,6 +63,16 @@ type ExtensionSourceView struct {
 	StateDir       bool
 	Executables    int
 	Tools          int
+}
+
+// DocxExtensionSettings is the non-secret DOCX package state. It has no
+// application credentials: the helper only needs its workspace root and the
+// explicit MCP source approval.
+type DocxExtensionSettings struct {
+	ExtensionPackageView
+	HostVersion string
+	LastAttempt string
+	Busy        bool
 }
 
 // LarkExtensionSettings is the non-secret editable Lark configuration.
@@ -178,6 +190,58 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 		view.CredentialAvailable = err == nil
 	}
 	view.LarkCLI, view.ProjectCLI = c.DiscoverLarkCLIs(view.LarkCLI, view.ProjectCLI)
+	return view, nil
+}
+
+// DocxExtensionSettings returns package/source state without starting the
+// helper or reaching the network. The DOCX helper has no application
+// credentials; only the MCP source needs review.
+func (c *Controller) DocxExtensionSettings() (DocxExtensionSettings, error) {
+	c.mu.Lock()
+	manager := c.opt.Extensions
+	desktopVersion := c.opt.Version
+	c.mu.Unlock()
+	if manager == nil {
+		return DocxExtensionSettings{}, errors.New("extension manager unavailable")
+	}
+	manager.RefreshLiveState()
+	view := DocxExtensionSettings{
+		ExtensionPackageView: ExtensionPackageView{
+			ID: "docx", Name: "DOCX",
+			Description: "Read, create and edit Word .docx files with headings, tables and images.",
+			State:       "not installed", BundledVersion: docxversion.Version,
+		},
+		HostVersion: strings.TrimPrefix(strings.TrimSpace(desktopVersion), "v"),
+	}
+	if pkg, ok := extensions.InstalledManagedPackage("docx"); ok {
+		view.Installed, view.Version, view.InstalledVersion, view.State = true, pkg.Version, pkg.Version, "installed · not configured"
+	}
+	if snapshot, ok := manager.Source(docxSourceRef); ok {
+		view.Configured = true
+		view.Enabled = snapshot.Enabled
+		view.Trusted = snapshot.Trust == "approved"
+		view.State, view.Authentication, view.LastError = snapshot.State, snapshot.Authentication, snapshot.LastError
+		view.LastAttempt = extensions.LastAttemptText(snapshot)
+		view.Busy = snapshot.Busy
+		cfg, err := manager.Config(docxSourceRef)
+		if err != nil {
+			return view, err
+		}
+		if active, managed := extensions.ManagedPackageForExecutable("docx", cfg.Command); managed {
+			view.ActiveVersion, view.ActiveManaged = active.Version, true
+		} else {
+			view.ActiveVersion = strings.TrimSpace(snapshot.Version)
+		}
+		if view.ActiveVersion != "" {
+			view.Version = view.ActiveVersion
+		}
+	}
+	if view.Installed && view.InstalledVersion != docxversion.Version {
+		view.UpdateAvailable = true
+	}
+	if view.Configured && view.ActiveManaged && view.InstalledVersion != "" && view.ActiveVersion != view.InstalledVersion {
+		view.UpdateAvailable = true
+	}
 	return view, nil
 }
 
@@ -530,6 +594,108 @@ func (c *Controller) UninstallLark() error {
 		}
 	}
 	return extensions.RemoveAllManagedPackages("lark")
+}
+
+// InstallDocxRelease downloads the matching signed helper and writes a
+// disabled mcp:docx source. It does not enable or execute the source.
+func (c *Controller) InstallDocxRelease(ctx context.Context, hostVersion string, progress func(extensions.DocxDownloadProgress)) (extensions.ManagedPackage, error) {
+	pkg, err := extensions.InstallDocxReleaseWithProgress(ctx, hostVersion, progress)
+	if err != nil {
+		return extensions.ManagedPackage{}, err
+	}
+	if err := c.configureDocxPackage(pkg); err != nil {
+		return pkg, err
+	}
+	return pkg, nil
+}
+
+// InstallDocxPackage installs a bundled helper after checksum verification.
+// It is the offline fallback when the release asset cannot be downloaded.
+func (c *Controller) InstallDocxPackage(ctx context.Context, source, checksum, version string) (extensions.ManagedPackage, error) {
+	if err := ctx.Err(); err != nil {
+		return extensions.ManagedPackage{}, err
+	}
+	pkg, err := extensions.InstallManagedPackage(extensions.PackageInstallOptions{
+		ID: "docx", Version: version, Source: source, SHA256: checksum,
+	})
+	if err != nil {
+		return extensions.ManagedPackage{}, err
+	}
+	if err := c.configureDocxPackage(pkg); err != nil {
+		return pkg, err
+	}
+	return pkg, nil
+}
+
+// ConfigureInstalledDocx writes the fixed source for an already-installed
+// helper without downloading it again.
+func (c *Controller) ConfigureInstalledDocx() error {
+	pkg, ok := extensions.InstalledManagedPackage("docx")
+	if !ok {
+		return errors.New("install the golder-docx helper first")
+	}
+	return c.configureDocxPackage(pkg)
+}
+
+func (c *Controller) configureDocxPackage(pkg extensions.ManagedPackage) error {
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
+	}
+	defer release()
+	cfg := extensions.SourceConfig{
+		Enabled: false, Transport: "stdio", Command: pkg.Executable,
+		Args: []string{"serve"}, AllowedTools: []string{"docx_read", "docx_create", "docx_edit"},
+		CallTimeout: "30s", Network: false,
+	}
+	return manager.ReplaceSourceConfig(docxSourceRef, cfg)
+}
+
+// EnableDocx is the explicit trust boundary for the fixed DOCX source.
+func (c *Controller) EnableDocx() error {
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
+	}
+	defer release()
+	reviewed, err := manager.PrepareMCPEdit(docxSourceRef.ID)
+	if err != nil {
+		return err
+	}
+	return manager.EnableReviewedMCP(reviewed, true)
+}
+
+func (c *Controller) DisableDocx() error {
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
+	}
+	defer release()
+	reviewed, err := manager.PrepareMCPEdit(docxSourceRef.ID)
+	if err != nil {
+		return err
+	}
+	return manager.DisableReviewedMCP(reviewed)
+}
+
+// UninstallDocx removes the source and every installed DOCX helper. Generated
+// documents and unrelated workspace files are untouched.
+func (c *Controller) UninstallDocx() error {
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
+	}
+	defer release()
+	if manager.HasSource(docxSourceRef) {
+		reviewed, err := manager.PrepareMCPEdit(docxSourceRef.ID)
+		if err != nil {
+			return err
+		}
+		if err := manager.RemoveMCP(reviewed); err != nil {
+			return err
+		}
+	}
+	return extensions.RemoveAllManagedPackages("docx")
 }
 
 func credentialReferenceName(value string) string {

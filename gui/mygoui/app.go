@@ -142,6 +142,8 @@ type App struct {
 	displayNote    string
 
 	extension                  appsession.LarkExtensionSettings
+	extensionDocx              appsession.DocxExtensionSettings
+	docxProgress               string
 	extensionSources           []appsession.ExtensionSourceView
 	extensionEdit              appsession.LarkExtensionEdit
 	extensionDomains           map[string]bool

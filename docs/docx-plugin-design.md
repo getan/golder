@@ -5,6 +5,10 @@
 > 追加内容。依赖固定为 `github.com/mmonterroca/docxgo/v2 v2.16.0`。读取路径直接
 > 解析 `word/document.xml`，因为该版本 docxgo 的 `Paragraph.Style()` 始终返回
 > nil，无法可靠识别标题；写入仍使用 docxgo。使用说明见插件 README。
+>
+> GUI 已接入 first-party 包菜单：下载顺序为 GitHub release → `GOLDER_MIRROR`
+> 镜像 → 应用内 bundled helper；下载器显示阶段与字节进度，校验和镜像不一致
+> 会拒绝安装。安装后自动写入禁用的 `mcp:docx`，再由显式按钮完成 trust/enable。
 
 ## 1. 审计对象
 

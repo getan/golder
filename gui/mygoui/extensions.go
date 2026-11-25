@@ -13,6 +13,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	docxversion "github.com/getan/golder/extension/plugins/docx/version"
 	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/internal/extensions"
 )
@@ -108,6 +109,11 @@ func (a *App) loadExtensionSettings() {
 		return
 	}
 	a.extension = settings
+	if docx, docxErr := a.ctrl.DocxExtensionSettings(); docxErr == nil {
+		a.extensionDocx = docx
+	} else {
+		a.extensionErr = docxErr.Error()
+	}
 	a.extensionSources = a.ctrl.ExtensionSources()
 	a.extensionDomains = larkDomainSelection(settings.Domains)
 	a.extensionEdit = appsession.LarkExtensionEdit{
@@ -116,6 +122,205 @@ func (a *App) loadExtensionSettings() {
 		Domains: append([]string(nil), settings.Domains...), ProjectHost: settings.ProjectHost,
 	}
 	a.extensionErr = ""
+}
+
+func isStableRelease(version string) bool {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if version == "" || version == "dev" || strings.HasPrefix(version, "0.0.0") {
+		return false
+	}
+	_, err := extensions.DocxReleaseFor(version)
+	return err == nil
+}
+
+func bundledDocxHelper() (source, checksum string, err error) {
+	name := "golder-docx"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	var candidates []string
+	if resources, pathErr := mygo.App.Path(mygo.PathResources); pathErr == nil && resources != "" {
+		candidates = append(candidates, filepath.Join(resources, "extensions", "docx", name))
+	}
+	if self, pathErr := os.Executable(); pathErr == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(self), name))
+	}
+	for _, candidate := range candidates {
+		if info, statErr := os.Stat(candidate); statErr == nil && info.Mode().IsRegular() {
+			raw, readErr := os.ReadFile(candidate + ".sha256")
+			if readErr != nil || len(raw) > 4096 {
+				return "", "", errors.New("the bundled golder-docx checksum is missing")
+			}
+			return candidate, string(raw), nil
+		}
+	}
+	return "", "", errors.New("this build does not include a bundled golder-docx helper")
+}
+
+func formatDownloadBytes(value int64) string {
+	if value < 0 {
+		return "0 B"
+	}
+	const unit = 1024
+	if value < unit {
+		return fmt.Sprintf("%d B", value)
+	}
+	div, exp := int64(unit), 0
+	for n := value / unit; n >= unit && exp < 4; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(value)/float64(div), "KMGTPE"[exp])
+}
+
+func docxProgressText(p extensions.DocxDownloadProgress) string {
+	source := strings.TrimSpace(p.Source)
+	attempts := ""
+	if p.TotalAttempts > 1 {
+		attempts = fmt.Sprintf(" · source %d/%d", p.Attempt, p.TotalAttempts)
+	}
+	switch p.Stage {
+	case "checking":
+		return "Checking the release asset…"
+	case "checksums":
+		return "Downloading the SHA-256 manifest…" + attempts
+	case "downloading":
+		if p.Total > 0 {
+			percent := float64(p.Downloaded) * 100 / float64(p.Total)
+			return fmt.Sprintf("Downloading DOCX helper… %s / %s (%.0f%%) · %s%s",
+				formatDownloadBytes(p.Downloaded), formatDownloadBytes(p.Total), percent, source, attempts)
+		}
+		return fmt.Sprintf("Downloading DOCX helper… %s · %s%s", formatDownloadBytes(p.Downloaded), source, attempts)
+	case "verifying":
+		return "Verifying SHA-256 and archive bounds…"
+	case "extracting":
+		return "Extracting the verified helper…"
+	case "installing":
+		return "Installing the helper into the protected package store…"
+	case "complete":
+		return "Download and verification complete."
+	default:
+		if p.Stage == "" {
+			return "Preparing the DOCX helper…"
+		}
+		return "DOCX helper: " + p.Stage
+	}
+}
+
+func (a *App) installDocx() {
+	if a.extensionBusy {
+		return
+	}
+	a.extensionBusy, a.extensionErr, a.extensionNote = true, "", "Preparing the DOCX helper…"
+	a.docxProgress = "Checking the release asset…"
+	win, ctrl := a.win, a.ctrl
+	ctx, cancel := context.WithCancel(context.Background())
+	a.extensionCancel = cancel
+	go func() {
+		defer cancel()
+		lastStage, lastAt := "", time.Time{}
+		report := func(p extensions.DocxDownloadProgress) {
+			if win == nil {
+				return
+			}
+			now := time.Now()
+			if p.Stage == lastStage && now.Sub(lastAt) < 200*time.Millisecond {
+				return
+			}
+			lastStage, lastAt = p.Stage, now
+			text := docxProgressText(p)
+			win.Update(func() {
+				if a.ctrl == ctrl {
+					a.docxProgress = text
+				}
+			})
+		}
+
+		host := strings.TrimSpace(a.extensionDocx.HostVersion)
+		var pkg extensions.ManagedPackage
+		var err error
+		var downloadErr error
+		if isStableRelease(host) {
+			pkg, err = ctrl.InstallDocxRelease(ctx, host, report)
+			if err != nil {
+				downloadErr = err
+			}
+		} else {
+			downloadErr = errors.New("no stable Golder release is available to download the DOCX helper")
+		}
+		if err != nil && ctx.Err() == nil && downloadErr != nil {
+			source, checksum, bundleErr := bundledDocxHelper()
+			if bundleErr != nil {
+				err = fmt.Errorf("download: %v; bundled fallback: %v", downloadErr, bundleErr)
+			} else {
+				if win != nil {
+					win.Update(func() {
+						if a.ctrl == ctrl {
+							a.docxProgress = "Download unavailable; installing the bundled helper…"
+						}
+					})
+				}
+				pkg, err = ctrl.InstallDocxPackage(ctx, source, checksum, docxversion.Version)
+			}
+		}
+		if err == nil {
+			if win != nil {
+				win.Update(func() {
+					if a.ctrl == ctrl {
+						a.docxProgress = "Enabling the reviewed DOCX source…"
+					}
+				})
+			}
+			err = ctrl.EnableDocx()
+		}
+		_ = pkg
+		if win == nil {
+			return
+		}
+		win.Update(func() {
+			a.extensionBusy = false
+			a.extensionCancel = nil
+			if a.ctrl != ctrl {
+				return
+			}
+			a.docxProgress = ""
+			if err != nil {
+				a.extensionErr, a.extensionNote = err.Error(), ""
+				return
+			}
+			a.extensionNote = "DOCX helper installed and the reviewed source is enabled."
+			a.loadExtensionSettings()
+		})
+	}()
+}
+
+func (a *App) configureDocx() {
+	a.runExtensionOperation("Writing and enabling the reviewed DOCX source…", func(_ context.Context, ctrl *appsession.Controller) error {
+		if err := ctrl.ConfigureInstalledDocx(); err != nil {
+			return err
+		}
+		return ctrl.EnableDocx()
+	})
+}
+
+func (a *App) setDocxEnabled(enabled bool) {
+	a.runExtensionOperation(map[bool]string{true: "Approving and enabling DOCX…", false: "Disabling DOCX…"}[enabled], func(_ context.Context, ctrl *appsession.Controller) error {
+		if enabled {
+			return ctrl.EnableDocx()
+		}
+		return ctrl.DisableDocx()
+	})
+}
+
+func (a *App) uninstallDocx() {
+	if a.extensionConfirm != "docx-uninstall" {
+		a.extensionConfirm = "docx-uninstall"
+		return
+	}
+	a.extensionConfirm = ""
+	a.runExtensionOperation("Removing the DOCX source and managed helper…", func(_ context.Context, ctrl *appsession.Controller) error {
+		return ctrl.UninstallDocx()
+	})
 }
 
 func (a *App) selectedLarkDomains() []string {
@@ -649,6 +854,7 @@ func (a *App) extensionsSettingsView(c *ui.Context) {
 		if a.mcpOAuth != nil {
 			a.mcpAuthorizationView(c)
 		}
+		a.docxExtensionCard(c)
 		a.larkExtensionCard(c)
 
 		if len(a.extensionSources) > 0 {
@@ -656,7 +862,7 @@ func (a *App) extensionsSettingsView(c *ui.Context) {
 		}
 		for _, source := range a.extensionSources {
 			source := source
-			if source.Kind == "mcp" && source.ID == "lark" {
+			if source.Kind == "mcp" && (source.ID == "lark" || source.ID == "docx") {
 				continue
 			}
 			ui.Row(c.Key(source.Kind+":"+source.ID)).Padding(10, 12).Gap(8).Radius(9).Background(theme.Surface).Border(1, theme.Border).AlignItems(ui.Center).Wrap().Children(func() {
@@ -725,6 +931,106 @@ func (a *App) extensionsSettingsView(c *ui.Context) {
 			}
 		}
 	})
+}
+
+func (a *App) docxExtensionCard(c *ui.Context) {
+	theme := c.Theme()
+	s := a.extensionDocx
+	state := strings.TrimSpace(s.State)
+	if state == "" {
+		state = "not installed"
+	}
+	if s.Busy {
+		state += " · in use now"
+	}
+	statusColor := theme.TextMuted
+	if s.State == "failed" {
+		statusColor = theme.Danger
+	} else if s.Enabled && (s.State == "ready" || s.State == "on demand") {
+		statusColor = theme.Success
+	} else if s.UpdateAvailable || (s.Installed && !s.Configured) {
+		statusColor = theme.Warning
+	}
+	ui.Column(c).Padding(14).Gap(12).Radius(12).Background(theme.Surface).Border(1, theme.Border).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Grow(1).Gap(2).Children(func() {
+				ui.Text(c, "DOCX").FontSize(15).FontWeight(600)
+				ui.Text(c, "Read, create and edit .docx files with headings, tables and images inside the workspace.").FontSize(11).TextColor(theme.TextMuted)
+			})
+			ui.Text(c, state).FontSize(11).TextColor(statusColor)
+		})
+		if s.LastAttempt != "" && s.State != "failed" {
+			ui.Text(c, "Last attempt failed: "+s.LastAttempt+". This is history, not the current state; a successful call clears it.").FontSize(11).TextColor(theme.TextMuted).Wrap()
+		}
+		if s.LastError != "" && s.State == "failed" {
+			ui.Text(c, s.LastError).FontSize(11).TextColor(theme.Danger).Wrap()
+		}
+
+		if s.Installed || s.Configured {
+			ui.Text(c, "Bundled: "+emptyFallback(s.BundledVersion, "unknown")+
+				" · installed: "+emptyFallback(s.InstalledVersion, "not installed")+
+				" · active: "+emptyFallback(s.ActiveVersion, "not configured")).FontSize(11).TextColor(theme.TextMuted)
+		}
+		if s.UpdateAvailable {
+			ui.Text(c, "A newer managed helper is available. Updating rewrites the fixed source and requires the normal enable review.").FontSize(11).TextColor(theme.Warning).Wrap()
+			if subtlePrimaryButton(c, "Update & enable", a.extensionBusy).Clicked() {
+				a.installDocx()
+			}
+		}
+
+		switch {
+		case !s.Installed && !s.Configured:
+			ui.Text(c, "Downloads the signed helper from GitHub, retries configured GOLDER_MIRROR sources, then falls back to the bundled copy. No TOML or application credentials are required.").FontSize(11).TextColor(theme.TextMuted).Wrap()
+			if subtlePrimaryButton(c, "Install & enable", a.extensionBusy).Clicked() {
+				a.installDocx()
+			}
+		case s.Installed && !s.Configured:
+			ui.Text(c, "The helper is installed but no MCP source exists yet. This writes the fixed disabled source, then enables it after the explicit button action.").FontSize(11).TextColor(theme.TextMuted).Wrap()
+			if subtlePrimaryButton(c, "Configure & enable", a.extensionBusy).Clicked() {
+				a.configureDocx()
+			}
+		case !s.Trusted:
+			ui.Text(c, "The source is configured but not approved. Review its executable and capabilities, then approve it.").FontSize(11).TextColor(theme.Warning).Wrap()
+			if subtlePrimaryButton(c, "Approve & enable", a.extensionBusy).Clicked() {
+				a.setDocxEnabled(true)
+			}
+		case s.Enabled:
+			if subtleButton(c, "Disable", a.extensionBusy).Clicked() {
+				a.setDocxEnabled(false)
+			}
+		default:
+			if subtlePrimaryButton(c, "Enable", a.extensionBusy).Clicked() {
+				a.setDocxEnabled(true)
+			}
+		}
+
+		if a.docxProgress != "" {
+			ui.Text(c, a.docxProgress).FontSize(11).TextColor(theme.TextMuted).Wrap()
+		}
+		if a.extensionBusy && a.extensionCancel != nil && a.docxProgress != "" {
+			if subtleButton(c, "Cancel download").Clicked() {
+				a.extensionCancel()
+				a.extensionNote = "Cancelling DOCX download…"
+			}
+		}
+		if s.Installed || s.Configured {
+			uninstallLabel := "Uninstall DOCX"
+			if a.extensionConfirm == "docx-uninstall" {
+				uninstallLabel = "Confirm uninstall DOCX"
+			}
+			if subtleButton(c, uninstallLabel, a.extensionBusy).Clicked() {
+				a.uninstallDocx()
+			}
+		}
+		a.extensionStatus(c)
+	})
+}
+
+func emptyFallback(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func (a *App) larkExtensionCard(c *ui.Context) {

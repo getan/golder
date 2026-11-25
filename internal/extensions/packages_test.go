@@ -14,8 +14,11 @@ func TestLarkPackageIsVisibleWithoutGrantingASource(t *testing.T) {
 	}
 	defer m.Close()
 	packages := m.PackageViews()
-	if len(packages) != 1 || packages[0].ID != "lark" || packages[0].Configured || len(m.List()) != 0 {
+	if len(packages) != 2 || packageByID(packages, "docx") == nil || packageByID(packages, "docx").Configured || len(m.List()) != 0 {
 		t.Fatalf("package discovery created or hid a source: packages=%+v sources=%+v", packages, m.List())
+	}
+	if lark := packageByID(packages, "lark"); lark == nil || lark.Configured {
+		t.Fatalf("Lark package disappeared: %+v", packages)
 	}
 
 	path := filepath.Join(home, "config.toml")
@@ -30,7 +33,16 @@ func TestLarkPackageIsVisibleWithoutGrantingASource(t *testing.T) {
 	}
 	defer configured.Close()
 	packages = configured.PackageViews()
-	if len(packages) != 1 || !packages[0].Configured || packages[0].Source.ID != "lark" {
+	if len(packages) != 2 || packageByID(packages, "lark") == nil || !packageByID(packages, "lark").Configured || packageByID(packages, "lark").Source.ID != "lark" {
 		t.Fatalf("configured package state = %+v", packages)
 	}
+}
+
+func packageByID(packages []PackageView, id string) *PackageView {
+	for i := range packages {
+		if packages[i].ID == id {
+			return &packages[i]
+		}
+	}
+	return nil
 }

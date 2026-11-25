@@ -68,6 +68,24 @@ builds:
     ldflags:
       - -s -w
 
+  - id: golder-docx
+    main: ./extension/plugins/docx/cmd/golder-docx
+    binary: golder-docx
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
 archives:
   - id: golder
     ids:
@@ -104,6 +122,18 @@ archives:
       - LICENSE
       - extension/plugins/lark/README.md
       - extension/plugins/lark/skills/**
+
+  - id: golder-docx
+    ids:
+      - golder-docx
+    # The helper version is independent from the host tag. The release workflow
+    # exports DOCX_HELPER_VERSION from extension/plugins/docx/version/version.go;
+    # internal/extensions/docx_release.go builds the same asset name.
+    name_template: "golder-docx_{{ .Version }}_helper{{ .Env.DOCX_HELPER_VERSION }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - extension/plugins/docx/README.md
+      - extension/plugins/docx/skills/**
 
 checksum:
   name_template: "checksums.txt"

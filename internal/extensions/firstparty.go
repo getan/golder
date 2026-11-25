@@ -25,6 +25,7 @@ type firstPartyPackage struct {
 }
 
 var firstPartyPackages = map[string]firstPartyPackage{
+	"docx": {Binary: "golder-docx"},
 	"lark": {Binary: "golder-lark"},
 }
 

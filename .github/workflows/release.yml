@@ -47,6 +47,15 @@ jobs:
           fi
           echo "LARK_HELPER_VERSION=$helper" >> "$GITHUB_ENV"
 
+      - name: Read the DOCX helper version
+        run: |
+          helper=$(sed -n 's/^const Version = "\([^"]*\)"$/\1/p' extension/plugins/docx/version/version.go)
+          if [ -z "$helper" ]; then
+            echo "::error::cannot read the DOCX helper version from extension/plugins/docx/version/version.go"
+            exit 1
+          fi
+          echo "DOCX_HELPER_VERSION=$helper" >> "$GITHUB_ENV"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:

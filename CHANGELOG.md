@@ -45,6 +45,10 @@ interactive REPL/TUI.
   paragraphs, bullets, tables and PNG/JPEG/GIF images. The plugin preflights
   ZIP/XML limits, rejects macro-enabled, encrypted, OLE and embedded content,
   re-encodes images, confines paths to the workspace and writes atomically.
+- Add a first-party DOCX row to the desktop Extensions page. The menu installs
+  the matching signed helper with GitHub-direct, `GOLDER_MIRROR` fallback and
+  bundled-helper fallback, shows phase/byte progress, then writes a disabled
+  `mcp:docx` source and requires the normal explicit approval before enabling.
 
 ### GUI
 - Collapse completed tool cards at the end of a run and prefetch two viewport

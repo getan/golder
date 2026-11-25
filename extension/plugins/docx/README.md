@@ -13,6 +13,28 @@ re-encoding and atomic output.
 GOWORK=off go build -o .build/golder-docx ./extension/plugins/docx/cmd/golder-docx
 ```
 
+## Install from the desktop GUI
+
+Open **Extensions → DOCX → Install & enable**. No TOML edit is required. The
+menu downloads the matching signed helper, shows the current phase and byte
+progress, and then asks for the normal explicit source approval.
+
+Download order is:
+
+1. direct GitHub release asset;
+2. every mirror prefix configured in `GOLDER_MIRROR` (space-separated), one at
+   a time;
+3. the helper bundled with the desktop app, if the release or network is
+   unavailable.
+
+Checksums come from the same release. Mirror checksum copies must agree, and
+the archive and extracted binary are verified before installation. A failed
+mirror is skipped and the next source is attempted; progress shows the source
+host and `source N/M`. Set `GOLDER_MIRROR=off` to disable mirror fallback.
+
+The installed helper lives under the protected Golder state directory. The
+source is written disabled and is enabled only by the explicit GUI action.
+
 Generate a disabled source table and merge it into `$GOLDER_HOME/config.toml`:
 
 ```sh

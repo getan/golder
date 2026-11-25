@@ -76,7 +76,7 @@ jobs:
           mv "$tmp" gui/mygo.json
           echo "GUI_VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Build the first-party Lark helper
+      - name: Build the first-party helpers
         shell: bash
         run: |
           set -euo pipefail
@@ -93,12 +93,33 @@ jobs:
               shasum -a 256 "$dir/$name" > "$dir/$name.sha256"
             fi
           }
+          build_docx() {
+            local goos=$1 arch=$2 dir=$3 name=golder-docx
+            if [[ "$goos" == windows ]]; then name+=.exe; fi
+            mkdir -p "$dir"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$arch" \
+              go build -trimpath -buildvcs=false -ldflags "-s -w" \
+              -o "$dir/$name" ./extension/plugins/docx/cmd/golder-docx
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$dir/$name" > "$dir/$name.sha256"
+            else
+              shasum -a 256 "$dir/$name" > "$dir/$name.sha256"
+            fi
+          }
           case "${{ matrix.name }}" in
-            macos-arm64) build_lark darwin arm64 gui/resources/darwin-arm64/extensions/lark ;;
-            windows) build_lark windows amd64 gui/resources/windows-amd64/extensions/lark ;;
+            macos-arm64)
+              build_lark darwin arm64 gui/resources/darwin-arm64/extensions/lark
+              build_docx darwin arm64 gui/resources/darwin-arm64/extensions/docx
+              ;;
+            windows)
+              build_lark windows amd64 gui/resources/windows-amd64/extensions/lark
+              build_docx windows amd64 gui/resources/windows-amd64/extensions/docx
+              ;;
             linux)
               build_lark linux amd64 gui/resources/linux-amd64/extensions/lark
               build_lark linux arm64 gui/resources/linux-arm64/extensions/lark
+              build_docx linux amd64 gui/resources/linux-amd64/extensions/docx
+              build_docx linux arm64 gui/resources/linux-arm64/extensions/docx
               ;;
           esac
 
@@ -264,6 +285,10 @@ jobs:
             echo "the GUI bundle is missing the first-party golder-lark helper" >&2
             exit 1
           fi
+          if ! find gui/build -type f -path '*/extensions/docx/golder-docx*' ! -name '*.sha256' -print -quit | grep -q .; then
+            echo "the GUI bundle is missing the first-party golder-docx helper" >&2
+            exit 1
+          fi
           if [[ "${{ matrix.kind }}" == "macos" ]]; then
             app=$(find gui/build -type d -name '*.app' -print -quit)
             helper="$app/Contents/Resources/extensions/lark/golder-lark"
@@ -271,6 +296,13 @@ jobs:
             actual=$(shasum -a 256 "$helper" | awk '{print $1}')
             if [[ "$expected" != "$actual" ]]; then
               echo '::error::The bundled Lark helper no longer matches its checksum after packaging/signing.'
+              exit 1
+            fi
+            helper="$app/Contents/Resources/extensions/docx/golder-docx"
+            expected=$(awk 'NR == 1 {print $1}' "$helper.sha256")
+            actual=$(shasum -a 256 "$helper" | awk '{print $1}')
+            if [[ "$expected" != "$actual" ]]; then
+              echo '::error::The bundled DOCX helper no longer matches its checksum after packaging/signing.'
               exit 1
             fi
             exe="$app/Contents/MacOS/Golder GUI"
