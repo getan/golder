@@ -36,8 +36,8 @@ interactive REPL/TUI.
 - Clamp the `MaxFloat32` follow sentinel to the previous frame's bottom when the
   first upward scroll leaves follow-mode, so that frame does not compute rows
   and an anchor far beyond the real content.
-- Make the transcript wheel-pause regression wait for wheel momentum to move
-  the viewport instead of depending on a fixed 300 ms delay.
+- Make the transcript wheel-pause regression assert that following pauses,
+  rather than assuming native wheel momentum moves the viewport in headless CI.
 - Skip anchor reveal when the anchor has no committed screen position yet, so
   the first upward wheel after follow mode does not cancel the native glide.
 

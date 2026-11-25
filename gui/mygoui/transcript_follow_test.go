@@ -274,11 +274,11 @@ func TestTranscriptWheelScrollPausesFollowing(t *testing.T) {
 	for range 20 {
 		tt.Advance(50 * time.Millisecond)
 		tt.Frame()
-		if !a.list.follow && a.list.scroll.Y < a.list.scroll.MaxY-1 {
+		if !a.list.follow {
 			return
 		}
 	}
-	if a.list.follow || a.list.scroll.Y >= a.list.scroll.MaxY-1 {
+	if a.list.follow {
 		t.Fatalf("mouse wheel failed to pause follow: follow=%v scroll=%+v", a.list.follow, a.list.scroll)
 	}
 }
