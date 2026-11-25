@@ -351,11 +351,11 @@ const contextGuide = "The context window is finite. Check the remaining budget w
 // (the working directory and $TMPDIR), so commands do not fail on denied
 // writes to sibling or home directories — and delete operations outside those
 // roots do not turn into unverifiable half-successes. It also names the
-// escalation contract. The rule it states is about REPEATING a request, not
-// about making one: asking for access the sandbox denies is ordinary work, and
-// the result now says which envelope the call actually ran in (bash_tool's
-// escapeNote), so the guide can tell the model to read that line instead of
-// assuming its request was granted.
+// escalation contract. Escape refusals are one-shot decisions, not permanent
+// bans; only a file-path refusal can be recorded for the session. The result
+// says which envelope the call actually ran in (bash_tool's escapeNote), so the
+// guide can tell the model to read that line instead of assuming its request
+// was granted.
 const sandboxGuide = "Shell commands may run inside an OS sandbox that confines file writes to the " +
 	"working directory and $TMPDIR and turns the network off. Create scratch and temporary files " +
 	"inside the working directory or $TMPDIR — never in sibling or home directories, where writes " +
@@ -365,10 +365,11 @@ const sandboxGuide = "Shell commands may run inside an OS sandbox that confines 
 	"answers: the reviewer under auto, the user under ask. The result then says which envelope the " +
 	"call ran in — \"escape granted\" means it ran outside the sandbox, \"escape not granted\" means it " +
 	"stayed contained — and that line is the fact to reason from; your request is not the fact. When " +
-	"it says not granted, do not repeat the same request: narrow the command, re-admit the one path it " +
-	"needs (/boundary readable|writable add), or ask the user to switch /permissions to ask so the " +
-	"request reaches a person. A new request is fine once the shape changes (a different path, a " +
-	"narrower command); what must not repeat is the same one. For one literal git push, including " +
+	"it says not granted, that answer applies to this call: a sandbox-escape refusal is one-shot and a " +
+	"later call is decided fresh. Re-submit when the person authorizes it in a new turn, when the " +
+	"permission mode changed to ask, or when the request shape changed (a narrower command or scope). " +
+	"Only a file-path refusal reported as \"refused earlier in this session\" is recorded; do not ask " +
+	"again for that exact path in this session. For one literal git push, including " +
 	"a different repository, use `git -C <repo> push ...`; do not use `cd <repo> && git push`, " +
 	"because shell chaining prevents deterministic remote resolution. Keep " +
 	"network:on but do not guess credential paths or add require_escalated merely because the remote " +
@@ -377,17 +378,28 @@ const sandboxGuide = "Shell commands may run inside an OS sandbox that confines 
 	"exits non-zero, do not classify its error text: retry that push exactly once outside the sandbox " +
 	"with network:on and require_escalated; if the escape is not granted or that retry fails, stop."
 
-// approvalGuide keeps capability approvals from becoming a retry loop. The
-// sandbox guide already says "do not repeat the same request"; this adds the
-// shapes that actually caused repeated human dialogs: per-call network grants,
-// path consent raised by an absolute $HOME operand the call did not need, and
-// PTY allocation, which no escalation can grant.
-const approvalGuide = "Approvals are capability answers, not retries. " +
+// approvalGuide keeps capability approvals from becoming a retry loop while
+// preserving the user's ability to make a fresh decision. It separates
+// one-shot risk-reviewer, sandbox and network refusals from recorded path
+// refusals: only the latter is a session ban. It also covers the shapes that
+// caused repeated human dialogs: per-call network grants, path consent raised
+// by an absolute $HOME operand the call did not need, and PTY allocation.
+const approvalGuide = "Approvals are capability answers for one call, not permanent bans. " +
 	"Batch calls that need the same capability: one command for several downloads or network tests, " +
 	"one write to a known external path, one interactive run. " +
-	"After a sandbox escape, path grant or network request is refused, never repeat the same " +
-	"capability or the same path — a result that says \"escape not granted\" is that refusal; change the " +
-	"approach or tell the user exactly what access is needed. " +
+	"Only file-path grants can be recorded: when the result says the path was refused earlier in this " +
+	"session, do not ask again for that exact path in this session. Everything else — a sandbox escape, " +
+	"a network request, or a credential-carrying call turned down by the risk reviewer — is decided " +
+	"fresh on the next call and leaves no record. Re-submitting it is a new question, not a repeat. " +
+	"A changed shape includes: the person authorizes it in a new turn, the permission mode changed to " +
+	"ask so the person answers instead of the reviewer, the caller established where a credential is " +
+	"meant to go, a narrower target or scope, or a different path. When the person explicitly asks you " +
+	"to run the same call again, submit it for their decision — do not refuse on the harness's or the " +
+	"person's behalf. Only an unbroken loop of identical calls in one turn, with no new information, " +
+	"must stop. " +
+	"Never report a refusal as a permanent property of a credential, host, or tool, and never call a " +
+	"credential invalid without an actual authentication result (401/403). Say what happened: which call " +
+	"was turned down, by whom, and what would make it decidable. " +
 	"When the sandbox reports that it cannot allocate a pseudo-terminal (PTY), do not retry with " +
 	"sandbox_permissions=\"require_escalated\"; use an in-process or unit test instead. " +
 	"Never redirect GOCACHE, GOMODCACHE or GOPATH into the repository to evade the sandbox; use " +

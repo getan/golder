@@ -175,9 +175,11 @@ func TestBuildSystemPromptAdvertisesBatchedToolCalls(t *testing.T) {
 }
 
 // TestBuildSystemPromptApprovalGuide pins the capability-approval etiquette:
-// the model must batch calls that share a capability, treat a refusal as final,
-// never retry a PTY failure with an escalation, avoid absolute $HOME operands,
-// and ask for boundary/network grants up front.
+// the model must batch calls that share a capability, distinguish one-shot
+// risk-reviewer/sandbox/network refusals from recorded path refusals, allow a
+// fresh decision after new authorization or a switch to ask mode, never retry a
+// PTY failure with an escalation, avoid absolute $HOME operands, and ask for
+// boundary/network grants up front.
 func TestBuildSystemPromptApprovalGuide(t *testing.T) {
 	got, err := BuildSystemPrompt(PromptConfig{
 		WorkingDir: "/work/proj",
@@ -189,8 +191,13 @@ func TestBuildSystemPromptApprovalGuide(t *testing.T) {
 	}
 	lower := strings.ToLower(got)
 	for _, want := range []string{
-		"capability answers, not retries",
-		"never repeat the same",
+		"capability answers for one call",
+		"not permanent bans",
+		"decided fresh",
+		"permission mode changed to ask",
+		"refused earlier in this session",
+		"explicitly asks you to run the same call again",
+		"401/403",
 		"pseudo-terminal",
 		"in-process or unit test",
 		"absolute $home path",
@@ -199,6 +206,31 @@ func TestBuildSystemPromptApprovalGuide(t *testing.T) {
 	} {
 		if !strings.Contains(lower, want) {
 			t.Errorf("approval guide missing %q:\n%s", want, got)
+		}
+	}
+	for _, banned := range []string{
+		"never repeat the same",
+		"treat a refusal as final",
+	} {
+		if strings.Contains(lower, banned) {
+			t.Errorf("approval guide still treats a refusal as permanent (%q):\n%s", banned, got)
+		}
+	}
+}
+
+func TestPermissionGuidesDistinguishOneShotRefusals(t *testing.T) {
+	for name, guide := range map[string]string{
+		"approvalGuide": approvalGuide,
+		"sandboxGuide":  sandboxGuide,
+	} {
+		lower := strings.ToLower(guide)
+		if strings.Contains(lower, "never repeat the same") {
+			t.Errorf("%s still treats every refusal as permanently unretryable", name)
+		}
+		for _, want := range []string{"decided fresh", "ask"} {
+			if !strings.Contains(lower, want) {
+				t.Errorf("%s missing one-shot/ask guidance %q", name, want)
+			}
 		}
 	}
 }

@@ -602,6 +602,7 @@ func blockCall(call agentcore.AgentToolCall, v Verdict, tail string) *agentcore.
 	if tail != "" {
 		msg += "; " + tail
 	}
+	msg += "; this is a one-shot decision for this call, not a permanent ban; a later call is decided fresh"
 	content := agentcore.ContentList{agentcore.NewTextContent(msg)}
 	return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
 }

@@ -11,6 +11,14 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Runtime permissions
+- Treat sandbox, network and risk-reviewer refusals as one-shot decisions,
+  not permanent bans. Only a recorded file-path refusal persists for the
+  session; a new user authorization, a switch to ask mode, or a changed
+  capability shape may resubmit the same call. The model is told never to
+  report a credential as invalid without an actual 401/403 result, and blocked
+  risk-judge results now state that the decision is one-shot.
+
 ### GUI
 - Anchor the transcript's middle visible row across first measurements and
   unknown rows. The reveal target is the row's previous committed screen
@@ -28,6 +36,8 @@ interactive REPL/TUI.
 - Clamp the `MaxFloat32` follow sentinel to the previous frame's bottom when the
   first upward scroll leaves follow-mode, so that frame does not compute rows
   and an anchor far beyond the real content.
+- Make the transcript wheel-pause regression wait for wheel momentum to move
+  the viewport instead of depending on a fixed 300 ms delay.
 
 ### Lark extension
 - Abort a GitHub or mirror helper download after 15 seconds without a byte, or

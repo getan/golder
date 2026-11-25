@@ -267,8 +267,13 @@ func TestTranscriptWheelScrollPausesFollowing(t *testing.T) {
 	a := followTestApp()
 	tt := ui.NewTester(a.view, 1200, 500)
 	tt.Wheel(700, 200, 0, -400)
-	tt.Advance(300 * time.Millisecond)
-	tt.Frame()
+	for range 20 {
+		tt.Advance(50 * time.Millisecond)
+		tt.Frame()
+		if !a.list.follow && a.list.scroll.Y < a.list.scroll.MaxY-1 {
+			return
+		}
+	}
 	if a.list.follow || a.list.scroll.Y >= a.list.scroll.MaxY-1 {
 		t.Fatalf("mouse wheel failed to pause follow: follow=%v scroll=%+v", a.list.follow, a.list.scroll)
 	}
