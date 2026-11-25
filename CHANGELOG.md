@@ -20,26 +20,17 @@ interactive REPL/TUI.
   risk-judge results now state that the decision is one-shot.
 
 ### GUI
-- Anchor the transcript's middle visible row across first measurements and
-  unknown rows. The reveal target is the row's previous committed screen
-  position plus the consumed gesture, with padding-corrected offsets; follow
-  mode now re-arms only after an explicit downward scroll, not when content
-  shrinks. Cold and warm 240-row Bash regressions report zero reverse jumps and
+- Replace the transcript's screen-anchor reveal with one scroll offset. Row
+  height measurements adjust `scroll.Y` directly, and follow remains one
+  explicit flag. Removed the per-row screen cache, reveal marker and
+  `ScrollIntoView` after-layout correction that made streaming and resize
+  flicker. Cold and warm 240-row Bash regressions report zero reverse jumps and
   zero settled drift.
-- Keep the transcript's top visible row anchored while rows above it are
-  measured, including their first measurement. The first scroll in a historical
-  session no longer shifts the content by the difference between estimated and
-  real row heights. A zero-height marker and `ScrollIntoView` apply the anchor
-  after layout but before paint, so the correction does not wait for the next
-  frame. A pointer-held text selection still leaves its first measurement to the
-  native selection, and later scroll corrections continue.
 - Clamp the `MaxFloat32` follow sentinel to the previous frame's bottom when the
   first upward scroll leaves follow-mode, so that frame does not compute rows
   and an anchor far beyond the real content.
 - Make the transcript wheel-pause regression assert that following pauses,
   rather than assuming native wheel momentum moves the viewport in headless CI.
-- Skip anchor reveal when the anchor has no committed screen position yet, so
-  the first upward wheel after follow mode does not cancel the native glide.
 
 ### Lark extension
 - Abort a GitHub or mirror helper download after 15 seconds without a byte, or

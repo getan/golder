@@ -31,21 +31,10 @@ func coldTitle(idx int) string {
 	return fmt.Sprintf("bash · echo synthetic-%03d · done", idx)
 }
 
-func scrollMetrics(t *testing.T, a *App, tt *ui.Tester, label string, rows int, titleAt func(int) string, direct bool) (steps, anomalies int, worstReverse, worstSettled float32) {
+func scrollMetrics(t *testing.T, a *App, tt *ui.Tester, label string, rows int, titleAt func(int) string) (steps, anomalies int, worstReverse, worstSettled float32) {
 	t.Helper()
 	scroll := func() {
-		if direct {
-			a.list.follow = false
-			a.list.upScrollPending = true
-			a.list.gestureDelta = -48
-			if a.list.scroll.Y > a.list.scroll.MaxY {
-				a.list.scroll.Y = a.list.scroll.MaxY - 48
-			} else {
-				a.list.scroll.Y = max(a.list.scroll.Y-48, 0)
-			}
-		} else {
-			tt.Scroll(1150, 200, 0, -48)
-		}
+		tt.Scroll(1150, 200, 0, -48)
 		tt.Frame()
 	}
 	scroll()
@@ -100,10 +89,10 @@ func TestColdBashScrollPosition(t *testing.T) {
 	a := coldBashApp()
 	tt := ui.NewTester(a.view, 1200, 600)
 	tt.Frame()
-	_, coldAnomalies, coldReverse, coldSettled := scrollMetrics(t, a, tt, "cold", 240, coldTitle, false)
+	_, coldAnomalies, coldReverse, coldSettled := scrollMetrics(t, a, tt, "cold", 240, coldTitle)
 	a.list.jumpToBottom()
 	tt.Frame()
-	_, warmAnomalies, warmReverse, warmSettled := scrollMetrics(t, a, tt, "warm", 240, coldTitle, false)
+	_, warmAnomalies, warmReverse, warmSettled := scrollMetrics(t, a, tt, "warm", 240, coldTitle)
 	if coldAnomalies != 0 || warmAnomalies != 0 || coldReverse > 1 || coldSettled > 1 || warmReverse > 1 || warmSettled > 1 {
 		t.Fatalf("scroll jumped: cold anomalies=%d reverse=%.2f settled=%.2f; warm anomalies=%d reverse=%.2f settled=%.2f",
 			coldAnomalies, coldReverse, coldSettled, warmAnomalies, warmReverse, warmSettled)

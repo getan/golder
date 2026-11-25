@@ -42,13 +42,8 @@ type transcriptWindow struct {
 	anchorKey       string
 	anchorOffset    float64
 	anchorValid     bool
-	anchorReveal    bool
 	selecting       bool
 	followRearm     bool
-	gestureDelta    float64
-	screens         map[string]transcriptScreen
-	revealTarget    float64
-	revealScreen    bool
 	first           int
 	last            int
 	builtLo         int
@@ -75,8 +70,6 @@ type transcriptSelectionKey struct {
 }
 
 type transcriptRange struct{ lo, hi int }
-
-type transcriptScreen struct{ y, scroll float64 }
 
 type transcriptMenuHit struct {
 	box       ui.Rect
@@ -150,10 +143,7 @@ func (s *transcriptWindow) jumpToBottom() {
 	s.upScrollPending = false
 	s.unseen = 0
 	s.hasReveal = false
-	s.anchorReveal = false
 	s.followRearm = false
-	s.gestureDelta = 0
-	s.revealScreen = false
 	s.scroll.Y = math.MaxFloat32
 }
 
@@ -164,7 +154,6 @@ func (s *transcriptWindow) handleScrollInput(ev ui.InputEvent) bool {
 	case ui.InputPointerUp:
 		s.selecting = false
 	case ui.InputScroll:
-		s.gestureDelta += float64(ev.DY)
 		if ev.DY < 0 && s.scroll.MaxY > 0 && s.scroll.Y > 0 {
 			s.follow, s.jumpPending, s.followSelection = false, false, false
 			s.upScrollPending = true
@@ -191,18 +180,9 @@ func (s *transcriptWindow) sync(rows []transcriptRow, waiting bool) {
 		anchor = s.keys[s.first]
 		offset = float64(s.scroll.Y) - transcriptPadding - s.prefix(s.first)
 	}
-	oldAnchorPrefix := math.NaN()
-	if anchor != "" {
-		if oldIndex, ok := s.index[anchor]; ok {
-			oldAnchorPrefix = s.prefix(oldIndex)
-		}
-	}
 	if s.height == nil {
 		s.height = make(map[string]float64)
 		s.measuring = make(map[string]bool)
-	}
-	if s.screens == nil {
-		s.screens = make(map[string]transcriptScreen)
 	}
 	s.rowsHead, s.rowsLen, s.waiting = head, len(rows), waiting
 	s.keys = make([]string, 0, len(rows)+1)
@@ -238,16 +218,8 @@ func (s *transcriptWindow) sync(rows []transcriptRow, waiting bool) {
 			delete(s.measuring, key)
 		}
 	}
-	for key := range s.screens {
-		if _, ok := s.index[key]; !ok {
-			delete(s.screens, key)
-		}
-	}
 	if anchor != "" && !s.follow {
 		if i, ok := s.index[anchor]; ok {
-			if !math.IsNaN(oldAnchorPrefix) && math.Abs(s.prefix(i)-oldAnchorPrefix) > 0.5 {
-				s.anchorReveal = true
-			}
 			s.scroll.Y = float32(max(s.prefix(i)+offset+transcriptPadding, 0))
 		} else {
 			s.anchorValid = false
@@ -314,7 +286,6 @@ func (s *transcriptWindow) measure(i int, h float32) bool {
 	if s.anchorValid && !s.follow && (!s.selecting || known) {
 		if anchor, ok := s.index[s.anchorKey]; ok && i < anchor {
 			s.scroll.Y = max(s.scroll.Y+float32(delta), 0)
-			s.anchorReveal = true
 		}
 	}
 	return true
@@ -406,45 +377,8 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 	if i, ok := s.index[s.focusKey]; ok {
 		ranges = append(ranges, transcriptRange{i, i + 1})
 	}
-	oldAnchorIndex := -1
-	if s.anchorValid {
-		if index, ok := s.index[s.anchorKey]; ok {
-			oldAnchorIndex = index
-		}
-	}
-	if oldAnchorIndex > 0 && !s.follow && !s.selecting {
-		for _, r := range ranges {
-			for i := r.lo; i < r.hi && i < oldAnchorIndex; i++ {
-				if s.height[s.keys[i]] <= 0 {
-					s.anchorReveal = true
-					break
-				}
-			}
-			if s.anchorReveal {
-				break
-			}
-		}
-	}
-	if s.gestureDelta != 0 && s.anchorValid && !s.follow && !s.selecting {
-		// Do not pin an anchor that has no committed screen position yet. On the
-		// first wheel after follow mode, sync may have just selected an anchor
-		// from the bottom sentinel; a reveal would cancel the native glide.
-		if _, ok := s.screens[s.anchorKey]; ok {
-			s.anchorReveal = true
-		}
-	}
 	if s.follow || n == 0 {
 		s.anchorValid = false
-		s.anchorReveal = false
-		s.revealScreen = false
-	} else if s.anchorReveal && s.anchorValid && oldAnchorIndex >= 0 {
-		if screen, ok := s.screens[s.anchorKey]; ok && !s.selecting {
-			s.revealTarget = screen.y - screen.scroll - s.gestureDelta
-			s.revealScreen = true
-			ranges = append(ranges, transcriptRange{oldAnchorIndex, oldAnchorIndex + 1})
-		} else {
-			s.revealScreen = false
-		}
 	} else if !s.selecting {
 		anchor := s.first
 		if s.last > s.first {
@@ -454,9 +388,7 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 		s.anchorKey = s.keys[anchor]
 		s.anchorOffset = float64(min(s.scroll.Y, s.scroll.MaxY)) - transcriptPadding - s.prefix(anchor)
 		s.anchorValid = true
-		s.revealScreen = false
 	}
-	s.gestureDelta = 0
 	slices.SortFunc(ranges, func(a, b transcriptRange) int { return a.lo - b.lo })
 	merged := ranges[:0]
 	for _, r := range ranges {

@@ -481,12 +481,6 @@ func (a *App) center(c *ui.Context) {
 			previous := 0
 			rendered := make(map[string]bool)
 			hits := make([]transcriptMenuHit, 0)
-			anchorIndex := -1
-			if window.anchorValid {
-				if index, ok := window.index[window.anchorKey]; ok {
-					anchorIndex = index
-				}
-			}
 			for _, visible := range ranges {
 				if visible.lo > previous {
 					space := window.prefix(visible.lo) - window.prefix(previous) - transcriptRowGap
@@ -517,32 +511,14 @@ func (a *App) center(c *ui.Context) {
 						c.Invalidate()
 					}
 					row.Children(func() {
-						if i == anchorIndex && window.anchorReveal {
-							top := window.anchorOffset
-							if window.revealScreen {
-								top = -window.revealTarget
-							} else if screen, ok := window.screens[window.anchorKey]; ok {
-								top = -(screen.y - screen.scroll)
-							}
-							marker := ui.Box(c.Key("transcript-anchor")).Absolute().Top(float32(top)).Width(0).Height(0).Shrink(0)
-							marker.ScrollIntoView(ui.ScrollIntoViewOptions{Block: ui.ScrollStart})
-							window.anchorReveal = false
-							window.revealScreen = false
-						}
 						if i < len(rows) {
 							a.transcriptRowView(c, rows[i])
 						} else if waiting {
 							ui.Text(c.Key("awaiting-first-output"), "正在思考…").FontSize(12).TextColor(t.TextMuted)
 						}
 					})
-					if bounds := row.Bounds(); bounds.H > 0 {
-						window.screens[key] = transcriptScreen{y: float64(bounds.Y), scroll: float64(scroll.Bounds().Y)}
-					}
 				}
 				previous = visible.hi
-			}
-			if anchorIndex < 0 || !rendered[window.anchorKey] {
-				window.anchorReveal = false
 			}
 			window.menuHits = hits
 			for key := range window.measuring {
