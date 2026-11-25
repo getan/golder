@@ -337,11 +337,16 @@ func shortDigest(d string) string {
 
 // mirrorURLs applies each mirror prefix to an original GitHub URL.
 func (u *Updater) mirrorURLs(original string) []string {
-	urls := githubmirror.Apply(original, u.Mirrors)
-	if len(urls) <= 1 {
+	if len(u.Mirrors) == 0 {
 		return nil
 	}
-	return urls[1:]
+	urls := make([]string, 0, len(u.Mirrors))
+	for _, m := range u.Mirrors {
+		if m != "" {
+			urls = append(urls, m+original)
+		}
+	}
+	return urls
 }
 
 // sourceHost returns the host of a download source for user-facing notices,

@@ -66,6 +66,11 @@ interactive REPL/TUI.
   `--key-file` still require the `{file}` placeholder, and `@file`, stdin,
   workspace escapes and remote keys that look like paths remain rejected.
 
+### Self-update
+- Restore explicit mirror prefixes for self-update after sharing the GitHub
+  mirror list; custom mirror URLs and non-GitHub test endpoints are prefixed
+  again instead of being filtered out.
+
 ### Windows desktop compatibility
 - Add a native File/Exit menu and guard shutdown while a Windows file picker is
   open. The Windows GUI packaging workflow exercises the menu and picker on a
