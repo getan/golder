@@ -3,10 +3,39 @@ package runtime
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/provider"
 )
+
+func TestStreamResponseCutsThinkingOnlyTurn(t *testing.T) {
+	partial := agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant}
+	thinking := partial
+	thinking.Content = agentcore.ContentList{agentcore.NewThinkingContent("still reasoning")}
+	cfg := LoopConfig{
+		Model:           "fake",
+		ThinkingTimeout: 20 * time.Millisecond,
+		Stream: func(ctx context.Context, model string, llm provider.LlmContext, cfg provider.StreamConfig) (*provider.AssistantMessageEventStream, error) {
+			s := provider.NewAssistantMessageEventStream(2)
+			go func() {
+				_ = s.Emit(ctx, provider.StreamStartEvent{Partial: partial})
+				_ = s.Emit(ctx, provider.StreamThinkingEvent{Partial: thinking})
+				<-ctx.Done()
+				s.Close()
+			}()
+			return s, nil
+		},
+	}
+	agentCtx := &agentcore.AgentContext{Messages: agentcore.MessageList{agentcore.UserMessage{RoleField: agentcore.RoleUser}}}
+	msg, _ := runStream(t, agentCtx, cfg)
+	if !msg.HasThinking() || msg.HasVisibleOutput() {
+		t.Fatalf("timed-out partial = %+v, want thinking only", msg)
+	}
+	if msg.StopReason != agentcore.StopReasonEndTurn {
+		t.Errorf("stop reason = %q, want end_turn so the loop can stall-recover", msg.StopReason)
+	}
+}
 
 // fakeStream builds a StreamFn that replays a fixed sequence of events, pushing
 // each onto an AssistantMessageEventStream from a producer goroutine.

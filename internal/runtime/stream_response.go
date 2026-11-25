@@ -7,6 +7,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/compaction"
@@ -24,6 +25,9 @@ type LoopConfig struct {
 	APIKey string
 	// ThinkingLevel is the reasoning effort for requests.
 	ThinkingLevel agentcore.ThinkingLevel
+	// ThinkingTimeout bounds how long a turn may stream only thinking before it
+	// is cut and reported as a stall. Zero uses defaultThinkingTimeout.
+	ThinkingTimeout time.Duration
 	// Stream produces the provider stream. Required (defaults are wired by
 	// callers/tests, e.g. a fake provider).
 	Stream provider.StreamFn
@@ -99,8 +103,11 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 			key = dyn
 		}
 	}
-	// 5. build the provider stream.
-	stream, err := cfg.Stream(ctx, cfg.Model, llm, provider.StreamConfig{
+	// 5. build the provider stream. A separate context lets the thinking-only
+	// watchdog stop the provider without cancelling the whole run.
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	stream, err := cfg.Stream(streamCtx, cfg.Model, llm, provider.StreamConfig{
 		APIKey:        key,
 		ThinkingLevel: cfg.ThinkingLevel,
 		Extra:         cfg.Extra,
@@ -114,7 +121,9 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 
 	// 6. drain the stream, back-filling the partial into the context.
 	addedPartial := false
+	var lastPartial agentcore.AssistantMessage
 	backfill := func(partial agentcore.AssistantMessage) {
+		lastPartial = partial
 		if !addedPartial {
 			agentCtx.Messages = append(agentCtx.Messages, partial)
 			addedPartial = true
@@ -123,69 +132,141 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 		}
 	}
 
-	for ev := range stream.Events() {
-		switch e := ev.(type) {
-		case provider.StreamStartEvent:
-			backfill(e.Partial)
-			if err := emit(ctx, agentcore.MessageStartEvent{Message: e.Partial}); err != nil {
-				return agentcore.AssistantMessage{}, err
+	timeout := cfg.ThinkingTimeout
+	if timeout <= 0 {
+		timeout = defaultThinkingTimeout
+	}
+	var thinkingTimer *time.Timer
+	var thinkingC <-chan time.Time
+	stopThinking := func() {
+		if thinkingTimer == nil {
+			return
+		}
+		if !thinkingTimer.Stop() {
+			select {
+			case <-thinkingTimer.C:
+			default:
 			}
-		case provider.StreamTextEvent:
-			backfill(e.Partial)
-			if err := emit(ctx, agentcore.MessageUpdateEvent{Message: e.Partial, AssistantMessageEvent: e}); err != nil {
-				return agentcore.AssistantMessage{}, err
-			}
-		case provider.StreamThinkingEvent:
-			backfill(e.Partial)
-			if err := emit(ctx, agentcore.MessageUpdateEvent{Message: e.Partial, AssistantMessageEvent: e}); err != nil {
-				return agentcore.AssistantMessage{}, err
-			}
-		case provider.StreamToolCallEvent:
-			backfill(e.Partial)
-			if err := emit(ctx, agentcore.MessageUpdateEvent{Message: e.Partial, AssistantMessageEvent: e}); err != nil {
-				return agentcore.AssistantMessage{}, err
-			}
-		case provider.StreamNoticeEvent:
-			// Provider-layer progress (a cut stream being retried) is an observer
-			// event, not message content: it must not create or mutate the
-			// assistant partial, and a front-end that ignores it loses nothing.
-			if err := emit(ctx, agentcore.ProviderNoticeEvent{
-				Kind:        e.Kind,
-				Provider:    e.Provider,
-				Reason:      e.Reason,
-				Window:      e.Window,
-				Attempt:     e.Attempt,
-				MaxAttempts: e.MaxAttempts,
-				Detail:      e.Detail,
-			}); err != nil {
-				return agentcore.AssistantMessage{}, err
-			}
-		case provider.StreamDoneEvent:
-			final := finalizeMessage(agentCtx, e.Message, &addedPartial)
-			if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
-				return agentcore.AssistantMessage{}, err
-			}
-			return final, nil
-		case provider.StreamErrorEvent:
-			final := finalizeMessage(agentCtx, e.Message, &addedPartial)
-			if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
-				return agentcore.AssistantMessage{}, err
-			}
-			return final, nil
+		}
+		thinkingTimer, thinkingC = nil, nil
+	}
+	defer stopThinking()
+	startThinking := func() {
+		if thinkingC == nil {
+			thinkingTimer = time.NewTimer(timeout)
+			thinkingC = thinkingTimer.C
 		}
 	}
-
-	// 7. stream ended without done/error: fall back to the stream result.
-	final, resErr := stream.Result(ctx)
-	if resErr != nil {
-		return terminalMessage(cfg, resErr), nil
+	hasVisible := false
+	events := stream.Events()
+	for {
+		select {
+		case <-ctx.Done():
+			return terminalMessage(cfg, ctx.Err()), nil
+		case <-thinkingC:
+			// The provider has streamed reasoning for the whole window without
+			// producing text or a call. Cut this attempt and return the partial as
+			// an ordinary reasoning-only turn: the loop's stall recovery will lower
+			// effort and ask for one concrete next step instead of waiting forever.
+			cancelStream()
+			stopThinking()
+			if !addedPartial {
+				return terminalMessage(cfg, context.DeadlineExceeded), nil
+			}
+			lastPartial.StopReason = agentcore.StopReasonEndTurn
+			final := finalizeMessage(agentCtx, lastPartial, &addedPartial)
+			if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
+				return agentcore.AssistantMessage{}, err
+			}
+			return final, nil
+		case ev, ok := <-events:
+			if !ok {
+				stopThinking()
+				final, resErr := stream.Result(ctx)
+				if resErr != nil {
+					return terminalMessage(cfg, resErr), nil
+				}
+				final = finalizeMessage(agentCtx, final, &addedPartial)
+				if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
+					return agentcore.AssistantMessage{}, err
+				}
+				return final, nil
+			}
+			switch e := ev.(type) {
+			case provider.StreamStartEvent:
+				if e.Partial.HasVisibleOutput() {
+					hasVisible = true
+				}
+				if !hasVisible && e.Partial.HasThinking() {
+					startThinking()
+				}
+				backfill(e.Partial)
+				if err := emit(ctx, agentcore.MessageStartEvent{Message: e.Partial}); err != nil {
+					return agentcore.AssistantMessage{}, err
+				}
+			case provider.StreamTextEvent:
+				if e.Partial.HasVisibleOutput() {
+					hasVisible = true
+					stopThinking()
+				}
+				backfill(e.Partial)
+				if err := emit(ctx, agentcore.MessageUpdateEvent{Message: e.Partial, AssistantMessageEvent: e}); err != nil {
+					return agentcore.AssistantMessage{}, err
+				}
+			case provider.StreamThinkingEvent:
+				if !hasVisible {
+					startThinking()
+				}
+				backfill(e.Partial)
+				if err := emit(ctx, agentcore.MessageUpdateEvent{Message: e.Partial, AssistantMessageEvent: e}); err != nil {
+					return agentcore.AssistantMessage{}, err
+				}
+			case provider.StreamToolCallEvent:
+				hasVisible = true
+				stopThinking()
+				backfill(e.Partial)
+				if err := emit(ctx, agentcore.MessageUpdateEvent{Message: e.Partial, AssistantMessageEvent: e}); err != nil {
+					return agentcore.AssistantMessage{}, err
+				}
+			case provider.StreamNoticeEvent:
+				// Provider-layer progress (a cut stream being retried) is an observer
+				// event, not message content: it must not create or mutate the
+				// assistant partial, and a front-end that ignores it loses nothing.
+				if err := emit(ctx, agentcore.ProviderNoticeEvent{
+					Kind:        e.Kind,
+					Provider:    e.Provider,
+					Reason:      e.Reason,
+					Window:      e.Window,
+					Attempt:     e.Attempt,
+					MaxAttempts: e.MaxAttempts,
+					Detail:      e.Detail,
+				}); err != nil {
+					return agentcore.AssistantMessage{}, err
+				}
+			case provider.StreamDoneEvent:
+				stopThinking()
+				final := finalizeMessage(agentCtx, e.Message, &addedPartial)
+				if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
+					return agentcore.AssistantMessage{}, err
+				}
+				return final, nil
+			case provider.StreamErrorEvent:
+				stopThinking()
+				final := finalizeMessage(agentCtx, e.Message, &addedPartial)
+				if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
+					return agentcore.AssistantMessage{}, err
+				}
+				return final, nil
+			}
+		}
 	}
-	final = finalizeMessage(agentCtx, final, &addedPartial)
-	if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
-		return agentcore.AssistantMessage{}, err
-	}
-	return final, nil
 }
+
+// defaultThinkingTimeout is the maximum time a single turn may spend streaming
+// reasoning with no text and no tool call. The provider's SSE guard bounds
+// silence, but thinking counts as content there, so a reasoning-only runaway
+// needs this separate ceiling.
+const defaultThinkingTimeout = 90 * time.Second
 
 // finalizeMessage replaces the placeholder partial with the final message, or
 // appends it if the provider sent done/error without a prior start. The stored

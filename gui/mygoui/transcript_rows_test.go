@@ -140,6 +140,23 @@ func TestApprovalAndReviewFoldInsideToolCard(t *testing.T) {
 	}
 }
 
+func TestRunEndCollapsesFinishedToolCards(t *testing.T) {
+	a := testApp()
+	a.items = []appsession.Item{
+		{ID: "done", Kind: appsession.ItemTool, Done: true, Tool: &appsession.ToolState{ID: "done", Name: "bash"}},
+		{ID: "running", Kind: appsession.ItemTool, Done: false, Tool: &appsession.ToolState{ID: "running", Name: "bash", Running: true}},
+	}
+	a.toolOpen["done"] = true
+	a.toolOpen["running"] = true
+	a.applyEvent(appsession.Event{Kind: appsession.EventRunEnd})
+	if a.toolOpen["done"] {
+		t.Fatal("completed tool card should collapse at run end")
+	}
+	if !a.toolOpen["running"] {
+		t.Fatal("still-running tool card should remain open")
+	}
+}
+
 func TestPendingApprovalWithoutToolUsesStablePlaceholder(t *testing.T) {
 	a := testApp()
 	a.pending = []appsession.ApprovalView{{ID: "approval", RunID: "run-1", ToolCallID: "call-1", Tool: "bash", Summary: "echo hello"}}

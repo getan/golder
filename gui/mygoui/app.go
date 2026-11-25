@@ -507,6 +507,7 @@ func (a *App) applyEvent(ev appsession.Event) {
 			a.updateTitle()
 		}
 	case appsession.EventRunEnd:
+		a.collapseFinishedToolCards()
 		a.banner, a.bannerErr = "", false
 		if ev.Error != "" {
 			a.banner, a.bannerErr = ev.Error, true
@@ -551,6 +552,20 @@ func (a *App) replaceItem(it appsession.Item) {
 	a.list.noteAddedItem(it)
 	a.index[it.ID] = len(a.items)
 	a.items = append(a.items, it)
+}
+
+// collapseFinishedToolCards makes a completed run compact in one step. Cards
+// remain expandable by clicking; collapsing only at the run boundary avoids
+// fighting the user while commands are still producing output.
+func (a *App) collapseFinishedToolCards() {
+	for _, it := range a.items {
+		if it.Kind == appsession.ItemTool && it.Tool != nil && it.Done {
+			a.toolOpen[it.ID] = false
+		}
+	}
+	if a.list != nil {
+		a.list.remeasure = true
+	}
 }
 
 func (a *App) removeApproval(id string) {
@@ -674,6 +689,9 @@ func (a *App) refreshProjects() {
 }
 
 func (a *App) refreshChanges() {
+	if a.ctrl == nil {
+		return
+	}
 	if a.diffCancel != nil {
 		a.diffCancel()
 		a.diffCancel = nil

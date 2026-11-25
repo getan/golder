@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	transcriptRowEstimate = 72.0
-	transcriptRowGap      = 14.0
-	transcriptPadding     = 18.0
-	transcriptOverscan    = 3
+	transcriptRowEstimate   = 72.0
+	transcriptRowGap        = 14.0
+	transcriptPadding       = 18.0
+	transcriptOverscan      = 3
+	transcriptOverscanPages = 2.0
 )
 
 // transcriptWindow keeps normal rendering virtual, but retains the contiguous
@@ -365,6 +366,16 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 	s.last = s.rowAt(max(y+float64(viewport)-transcriptPadding, 0))
 	lo := max(s.first-transcriptOverscan, 0)
 	hi := min(s.last+transcriptOverscan+1, n)
+	// Warm the adjacent pages as well as the row overscan. A row's real height
+	// is only known after it has been laid out once; without this, the first
+	// pass through a command-card-heavy transcript measures those rows while the
+	// user is already scrolling, which is the cold-cache jump.
+	prefetch := float64(viewport) * transcriptOverscanPages
+	prefetchLo := s.rowAt(max(y-prefetch-transcriptPadding, 0))
+	prefetchHi := s.rowAt(max(y+float64(viewport)+prefetch-transcriptPadding, 0)) + 1
+	lo = min(lo, prefetchLo)
+	hi = max(hi, prefetchHi)
+	hi = min(hi, n)
 	s.builtLo, s.builtHi = lo, hi
 	ranges := []transcriptRange{{lo, hi}}
 	if s.pinned {

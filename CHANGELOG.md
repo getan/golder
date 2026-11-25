@@ -20,6 +20,10 @@ interactive REPL/TUI.
   risk-judge results now state that the decision is one-shot.
 
 ### Runtime loop
+- Cut a turn that streams only reasoning for 90 seconds without text or a
+  tool call. The partial is returned as a stall, so the existing recovery
+  lowers effort and asks for one concrete next step instead of waiting
+  indefinitely.
 - When a model ends a turn with reasoning only, the automatic continuation now
   drops to minimal thinking effort and restores the configured level as soon as
   the model acts or answers. This targets the opencode-go / DeepSeek
@@ -36,6 +40,9 @@ interactive REPL/TUI.
   `index` or use the pre-tool_calls shape no longer lose or merge calls.
 
 ### GUI
+- Collapse completed tool cards at the end of a run and prefetch two viewport
+  pages of transcript row heights, so command-card-heavy sessions do not
+  remeasure cards while the first scroll is already in progress.
 - Replace the transcript's screen-anchor reveal with one scroll offset. Row
   height measurements adjust `scroll.Y` directly, and follow remains one
   explicit flag. Removed the per-row screen cache, reveal marker and
