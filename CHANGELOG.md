@@ -55,9 +55,10 @@ interactive REPL/TUI.
   `mcp:docx` source and requires the normal explicit approval before enabling.
 
 ### GUI
-- Glide fast trackpad flicks over a few frames so scrolling transcript text
-  does not trail across a line or more per frame. This uses MyGo v0.10.2,
-  which also applies layout scroll anchors before the next build.
+- Apply precise trackpad scroll as constant-speed pending travel so fast
+  flicks never move more than a line per frame, and a small event never drops
+  a glide's remaining travel. This uses MyGo v0.10.3, which also applies
+  layout scroll anchors before the next build.
 - Recompute both bundled helper checksums after MyGo signs nested macOS
   executables, so the DOCX helper no longer fails the release bundle boundary
   check.
