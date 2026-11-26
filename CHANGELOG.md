@@ -40,6 +40,9 @@ interactive REPL/TUI.
   `index` or use the pre-tool_calls shape no longer lose or merge calls.
 
 ### Extensions
+- Reload extension sources from config.toml when the desktop reads Settings,
+  so a package installed by the TUI while the GUI was running shows as
+  configured instead of "installed · not configured".
 - Add Install & enable DOCX to the TUI package detail. It downloads the
   matching verified helper with mirror fallback, shows phase/byte progress,
   writes a disabled mcp:docx source and enables it only through the reviewed

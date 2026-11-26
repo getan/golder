@@ -130,6 +130,9 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 	if manager == nil {
 		return LarkExtensionSettings{}, errors.New("extension manager unavailable")
 	}
+	// A TUI or another process may have installed a first-party source since
+	// this desktop process started; the package state is read from disk.
+	_ = manager.ReloadSources()
 	// Readiness is current; the probe cannot start a helper or reach the network.
 	manager.RefreshLiveState()
 	view := LarkExtensionSettings{
@@ -204,6 +207,7 @@ func (c *Controller) DocxExtensionSettings() (DocxExtensionSettings, error) {
 	if manager == nil {
 		return DocxExtensionSettings{}, errors.New("extension manager unavailable")
 	}
+	_ = manager.ReloadSources()
 	manager.RefreshLiveState()
 	view := DocxExtensionSettings{
 		ExtensionPackageView: ExtensionPackageView{

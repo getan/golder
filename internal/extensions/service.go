@@ -149,55 +149,7 @@ func New(opts Options) (*Manager, error) {
 		_ = json.Unmarshal(b, &saved)
 	}
 	add := func(ref SourceRef, c SourceConfig) {
-		if c.StateDir {
-			c.stateHome = sourceHome(ref)
-		}
-		s := &source{ref: ref, cfg: c, state: "disconnected", auth: "not-required"}
-		s.logs.registerConfigSecrets(c)
-		s.enabled.Store(c.Enabled && !opts.NoTools)
-		var fp string
-		err := validateConfig(ref, c)
-		if err == nil {
-			fp, err = fingerprint(ref, c)
-		}
-		s.fingerprint = fp
-		if fp != "" && ref.Kind == "mcp" && c.Transport == "http" && !hasAuthorizationHeader(c.Headers) {
-			oauthFP, authErr := fingerprint(ref, c)
-			if authErr == nil {
-				_, authErr = mcpauth.Stored(ref.String(), oauthFP, c.URL, s.logs.AddSecrets)
-			}
-			if authErr != nil {
-				s.logs.mu.Lock()
-				s.logs.unresolved = true
-				s.logs.mu.Unlock()
-			}
-		}
-		if err != nil {
-			s.state = "failed"
-			s.recordFailure("config", clean(err.Error(), 2048), time.Now())
-		}
-		if p, ok := saved[ref.String()]; ok {
-			s.approval = p.Approval
-			s.storedApproval = p.Approval
-			if p.Fingerprint == fp && fp != "" && s.logs.safeCatalog(p.Catalog) {
-				s.catalog = p.Catalog
-			}
-		}
-		if len(c.Headers) > 0 || len(c.Env) > 0 {
-			s.auth = "configured"
-		}
-		if c.Runtime == "cli" {
-			if mf, e := loadManifest(expandPath(c.Manifest)); e == nil {
-				s.catalog.Tools = nil
-				for _, t := range mf.Tools {
-					s.catalog.Tools = append(s.catalog.Tools, specOf(t))
-				}
-				s.version = mf.Plugin.Version
-				if err == nil {
-					s.state = "on demand"
-				}
-			}
-		}
+		s := m.makeSource(ref, c, saved)
 		m.sources[ref.String()] = s
 		m.publish(s)
 	}
@@ -224,6 +176,108 @@ func New(opts Options) (*Manager, error) {
 	m.revision.Store(1)
 	go m.deliverEvents()
 	return m, nil
+}
+
+// makeSource builds the source for one declaration, with the approval and
+// catalog another process saved for it.
+func (m *Manager) makeSource(ref SourceRef, c SourceConfig, saved map[string]persisted) *source {
+	if c.StateDir {
+		c.stateHome = sourceHome(ref)
+	}
+	s := &source{ref: ref, cfg: c, state: "disconnected", auth: "not-required"}
+	s.logs.registerConfigSecrets(c)
+	s.enabled.Store(c.Enabled && !m.opts.NoTools)
+	var fp string
+	err := validateConfig(ref, c)
+	if err == nil {
+		fp, err = fingerprint(ref, c)
+	}
+	s.fingerprint = fp
+	if fp != "" && ref.Kind == "mcp" && c.Transport == "http" && !hasAuthorizationHeader(c.Headers) {
+		oauthFP, authErr := fingerprint(ref, c)
+		if authErr == nil {
+			_, authErr = mcpauth.Stored(ref.String(), oauthFP, c.URL, s.logs.AddSecrets)
+		}
+		if authErr != nil {
+			s.logs.mu.Lock()
+			s.logs.unresolved = true
+			s.logs.mu.Unlock()
+		}
+	}
+	if err != nil {
+		s.state = "failed"
+		s.recordFailure("config", clean(err.Error(), 2048), time.Now())
+	}
+	if p, ok := saved[ref.String()]; ok {
+		s.approval = p.Approval
+		s.storedApproval = p.Approval
+		if p.Fingerprint == fp && fp != "" && s.logs.safeCatalog(p.Catalog) {
+			s.catalog = p.Catalog
+		}
+	}
+	if len(c.Headers) > 0 || len(c.Env) > 0 {
+		s.auth = "configured"
+	}
+	if c.Runtime == "cli" {
+		if mf, e := loadManifest(expandPath(c.Manifest)); e == nil {
+			s.catalog.Tools = nil
+			for _, t := range mf.Tools {
+				s.catalog.Tools = append(s.catalog.Tools, specOf(t))
+			}
+			s.version = mf.Plugin.Version
+			if err == nil {
+				s.state = "on demand"
+			}
+		}
+	}
+	return s
+}
+
+// ReloadSources reads the configuration again and adds the sources another
+// process wrote since this Manager was made: the GUI started before the TUI
+// installed one. Sources already known stay as they are, with their live
+// state and approval; none is removed.
+func (m *Manager) ReloadSources() error {
+	if m == nil || m.closed.Load() {
+		return errors.New("extension manager unavailable")
+	}
+	var cfg Config
+	if !m.opts.IgnoreSources {
+		var err error
+		cfg, err = LoadConfig(m.opts.ConfigPath)
+		if err != nil {
+			return err
+		}
+	}
+	var saved map[string]persisted
+	if b, err := readLimited(m.statePath(), 16<<20); err == nil {
+		_ = json.Unmarshal(b, &saved)
+	}
+	var added []*source
+	m.mu.Lock()
+	add := func(ref SourceRef, c SourceConfig) {
+		key := ref.String()
+		if _, ok := m.sources[key]; ok {
+			return
+		}
+		s := m.makeSource(ref, c, saved)
+		m.sources[key] = s
+		added = append(added, s)
+	}
+	for id, c := range cfg.Plugins {
+		add(SourceRef{Kind: "plugin", ID: id}, c)
+	}
+	for id, c := range cfg.MCP.Servers {
+		add(SourceRef{Kind: "mcp", ID: id}, c)
+	}
+	m.mu.Unlock()
+	for _, s := range added {
+		m.publish(s)
+	}
+	if len(added) > 0 {
+		m.revision.Add(1)
+	}
+	return nil
 }
 
 func (m *Manager) statePath() string {
