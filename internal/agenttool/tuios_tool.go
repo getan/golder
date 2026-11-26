@@ -73,7 +73,8 @@ func (t *TuiosTool) Description() string {
 			"daemon events, not polling. A new pane with argv defaults to keep_open, preserving startup failures for capture; " +
 			"set close_on_exit:true for disposable panes. Close needs a full window id and refuses golder's own pane. " +
 			"A browser pane golder started quits through the endpoint it recorded before closing; force:true is an explicit hard close, not an automatic retry." + tuiBrowserCloseGuide +
-			" For SSH or large/multiline file-editing commands, use run with script instead of command/send. " +
+			" On an SSH/mosh pane run infers script mode; an explicit command there is refused before anything is written. " +
+			" For large or multiline file-editing commands, use run with script instead of command/send. " +
 			"script uses existing sh/base64/SHA tools, validates the entire payload before execution, and waits on receipts without polling or sleeps. " +
 			"Leave a blank shell prompt first; script runs noninteractively in a child POSIX sh and does not persist cd/aliases. " +
 			"Unknown execution state must never be automatically retried. Input serializes per pane, not across different panes."
@@ -131,7 +132,8 @@ const tuiosControlSchema = `{
     "timeout_ms":{"type":"integer","minimum":100,"maximum":600000,"description":"Default 30000, or 10000 for browser close; max 10 minutes."},
     "force":{"type":"boolean","description":"For close: allow hard close if the browser does not confirm normal exit; default false."},
     "until":{"type":"array","items":{"type":"string"},"description":"agent-state names; default idle, done, needs_input."},
-    "command":{"type":"string","maxLength":2048,"description":"For run: short interactive shell command; no newlines/control characters. Use script for SSH or large content."},
+    "mode":{"type":"string","enum":["command","script"],"description":"For run: optional explicit mode. Omit to infer: a remote (SSH/mosh) pane uses script, a local pane uses command. An explicit command on a remote pane is rejected before anything is written."},
+    "command":{"type":"string","maxLength":2048,"description":"For run: short interactive shell command, or the body to run as a script on a remote pane when mode is omitted. No newlines/control characters in command mode."},
     "script":{"type":"string","maxLength":1048576,"description":"For run: verified POSIX sh script, including multiline content, using only existing system tools on the target. Mutually exclusive with command/expect. Runs in a child shell, stdin closed. Leave a blank shell prompt first; no remote installation required."},
     "remote":{"type":"boolean","description":"For run script: require an SSH Linux context on a different kernel from this machine; prevents execution in the local shell after SSH drops. Automatically set when SSH is observed; set explicitly if detection is unavailable."},
     "text":{"type":"string","description":"For send: literal text written to the pane."},
@@ -182,6 +184,7 @@ type tuiosArgs struct {
 	Command           string   `json:"command,omitempty"`
 	Script            string   `json:"script,omitempty"`
 	Remote            bool     `json:"remote,omitempty"`
+	Mode              string   `json:"mode,omitempty"`
 	Text              string   `json:"text,omitempty"`
 	Submit            bool     `json:"submit,omitempty"`
 	Paste             bool     `json:"paste,omitempty"`
@@ -209,6 +212,8 @@ type tuiosArgs struct {
 	ConsumeLease      bool     `json:"-"`
 	TargetLabel       string   `json:"-"`
 	HostHint          string   `json:"-"`
+	RemoteHint        bool     `json:"-"`
+	Foreground        string   `json:"-"`
 }
 
 func (t *TuiosTool) Execute(ctx context.Context, callID string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (result agentcore.AgentToolResult, resultErr error) {
@@ -606,7 +611,7 @@ func validateWait(a tuiosArgs) error {
 }
 
 func (t *TuiosTool) run(ctx context.Context, a tuiosArgs) (agentcore.AgentToolResult, error) {
-	if err := validateRun(a); err != nil {
+	if err := normalizeRun(&a); err != nil {
 		return tuiosError(err), nil
 	}
 	c, err := t.newClient(ctx)
@@ -625,10 +630,10 @@ func (t *TuiosTool) run(ctx context.Context, a tuiosArgs) (agentcore.AgentToolRe
 	if a.Expect == "" {
 		res, err := c.Run(ctx, a.Window, a.Command, timeout, tuiosLines(a.Lines))
 		if err != nil {
-			return tuiosRunUnknown(a.Window, err), nil
+			return tuiosRunUnknown(a.Window, err, a.RemoteHint), nil
 		}
 		if res.Window != "" && res.Window != a.Window {
-			return tuiosRunUnknown(a.Window, errors.New("daemon returned a different pane; output was not attributed")), nil
+			return tuiosRunUnknown(a.Window, errors.New("daemon returned a different pane; output was not attributed"), a.RemoteHint), nil
 		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosTruncate(tuiosUntrusted(res.Output)))},
@@ -793,9 +798,43 @@ func (t *TuiosTool) artifactPath(kind, out, format string) (string, error) {
 	return artifactPath(t.cwd, kind, out, ext)
 }
 
-func validateRun(a tuiosArgs) error {
+// validateRun keeps the historical entry point for callers that only have
+// arguments; remote mode selection needs normalization too.
+func validateRun(a tuiosArgs) error { return normalizeRun(&a) }
+
+// normalizeRun validates a run call and chooses its mode. Without an explicit
+// mode a remote (SSH/mosh) pane runs command as a script, because its prompt is
+// behind a foreground ssh process the command path cannot prove. An explicit
+// command on such a pane is refused before anything is written; a later
+// not_at_prompt would mislead and cost a round trip.
+func normalizeRun(a *tuiosArgs) error {
+	if a.Script != "" && a.Command != "" {
+		return errors.New("script cannot be combined with command or expect")
+	}
+	switch a.Mode {
+	case "", "command", "script":
+	default:
+		return fmt.Errorf("unknown mode %q; use command or script", a.Mode)
+	}
+	if a.Script == "" && a.Command == "" {
+		return errors.New("command or script is required")
+	}
+	if a.Command != "" {
+		remote := a.RemoteHint || a.Remote
+		switch {
+		case a.Mode == "command":
+			if remote {
+				return fmt.Errorf("remote shell detected (foreground: %s); use run with script instead of command", runForeground(a))
+			}
+		case a.Mode == "script", a.Mode == "" && remote:
+			a.Script, a.Command = a.Command, ""
+			if a.RemoteHint {
+				a.Remote = true
+			}
+		}
+	}
 	if a.Script != "" {
-		if a.Command != "" || a.Expect != "" {
+		if a.Expect != "" {
 			return errors.New("script cannot be combined with command or expect")
 		}
 		if strings.TrimSpace(a.Script) == "" || len(a.Script) > tuiosMaxScript || strings.ContainsRune(a.Script, 0) {
@@ -823,6 +862,13 @@ func validateRun(a tuiosArgs) error {
 		}
 	}
 	return nil
+}
+
+func runForeground(a *tuiosArgs) string {
+	if a.Foreground != "" {
+		return a.Foreground
+	}
+	return "ssh/mosh"
 }
 
 func (t *TuiosTool) newWindow(ctx context.Context, a tuiosArgs) (agentcore.AgentToolResult, error) {

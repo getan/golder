@@ -310,8 +310,8 @@ func TestClaimedSSHPaneUsesScriptWithoutRepeatedHostControl(t *testing.T) {
 	if err = tool.checkControl(agentcore.WithNetworkGrant(context.Background()), &commandCall); err != nil {
 		t.Fatalf("lease validation failed before SSH command policy: %v", err)
 	}
-	if err = validateRun(commandCall); err == nil || !strings.Contains(err.Error(), "SSH commands require run with script") {
-		t.Fatalf("ordinary command bypassed SSH script requirement: %v", err)
+	if err = normalizeRun(&commandCall); err != nil || commandCall.Script != "hostname" || commandCall.Command != "" || !commandCall.Remote {
+		t.Fatalf("SSH command did not normalize to a remote script: %+v, %v", commandCall, err)
 	}
 }
 

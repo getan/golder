@@ -218,6 +218,9 @@ func TestTuiosRunNeverResendsAfterAmbiguousShellError(t *testing.T) {
 	if d["execution_state"] != "unknown" || d["retryable"] != false {
 		t.Fatalf("details = %#v, want unknown/non-retryable", res.Details)
 	}
+	if hint, _ := d["hint"].(string); !strings.Contains(hint, "local shell may be blocked") {
+		t.Fatalf("local unknown hint = %q", hint)
+	}
 }
 
 func TestTuiosListCoversExistingPanes(t *testing.T) {

@@ -178,7 +178,9 @@ func (t *TuiosTool) checkControl(ctx context.Context, a *tuiosArgs) error {
 	}
 	a.Window = win.WindowID
 	a.TargetLabel, a.HostHint = win.DisplayName, win.CwdHost
-	a.Remote = a.Remote || tuiosRemoteHint(win)
+	a.RemoteHint = tuiosRemoteHint(win)
+	a.Foreground = foregroundProgram(win.ForegroundCmd)
+	a.Remote = a.Remote || a.RemoteHint
 	if input && a.Remote && !t.Control.network(ctx) {
 		return errors.New("SSH pane input requires reviewed network authority")
 	}

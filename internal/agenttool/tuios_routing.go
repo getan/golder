@@ -66,8 +66,12 @@ func tuiosRemoteHint(w tuiosctl.Window) bool {
 	return false
 }
 
-func tuiosRunUnknown(window string, err error) agentcore.AgentToolResult {
-	out := map[string]any{"window": window, "execution_state": "unknown", "retryable": false, "error": err.Error(), "hint": "No fallback or resend was attempted. Inspect the exact pane before doing anything else: no_shell_integration may be reported AFTER a command ran. For a new SSH task at a blank prompt, use run with script."}
+func tuiosRunUnknown(window string, err error, remote bool) agentcore.AgentToolResult {
+	hint := "No fallback or resend was attempted. The local shell may be blocked inside an interactive program; capture the pane before retrying. no_shell_integration may be reported AFTER a command ran."
+	if remote {
+		hint = "No fallback or resend was attempted. This is a remote (SSH/mosh) pane; use run with script. no_shell_integration may be reported AFTER a command ran."
+	}
+	out := map[string]any{"window": window, "execution_state": "unknown", "retryable": false, "error": err.Error(), "hint": hint}
 	return agentcore.AgentToolResult{IsError: true, Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(out))}, Details: out}
 }
 

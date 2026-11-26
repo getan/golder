@@ -40,6 +40,10 @@ interactive REPL/TUI.
   `index` or use the pre-tool_calls shape no longer lose or merge calls.
 
 ### Extensions
+- Infer tuios `run` mode from the pane: a remote (SSH/mosh) pane runs a
+  command body as a script, an explicit `mode:"command"` there is refused
+  before any pane write, and unknown-run hints differ for remote and local
+  panes. Automatic retry after an unknown state remains disabled.
 - Reload extension sources from config.toml when the desktop reads Settings,
   so a package installed by the TUI while the GUI was running shows as
   configured instead of "installed · not configured".
