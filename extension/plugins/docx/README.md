@@ -47,7 +47,7 @@ enabled = false
 transport = "stdio"
 command = "/abs/path/golder-docx"
 args = ["serve"]
-allowed_tools = ["docx_read", "docx_create", "docx_edit"]
+allowed_tools = ["docx_read", "docx_create", "docx_edit", "docx_render"]
 call_timeout = "30s"
 network = false
 ```
@@ -112,6 +112,40 @@ Replacement is literal and case-sensitive. The input is never modified in
 place; the output is a separate workspace-relative `.docx`. Macro-enabled,
 encrypted, OLE, altChunk, ActiveX and embedded-object packages are rejected
 before parsing.
+
+### `docx_render`
+
+Render a table-based report into a copy of a workspace template, preserving
+the template's formatting:
+
+```json
+{
+  "path": "templates/report.docx",
+  "output": "reports/filled.docx",
+  "data": {
+    "policyNo": "P-123",
+    "title": "投保流程",
+    "steps": [
+      {"description": "1.提示进入投保流程", "images": ["shots/1.png"]},
+      {"description": "2.填写被保人信息", "images": ["shots/2a.png", "shots/2b.png"]}
+    ]
+  },
+  "images_per_row": 2,
+  "image_width_px": 180
+}
+```
+
+The template must contain one 2-column table:
+
+- row 1: policy label and value
+- row 2: report title (may span both columns)
+- row 3: prototype step row; its right cell must contain one inline drawing
+
+Each `data.steps` item clones the prototype row. The left cell gets
+`description`; the right cell receives its images, `images_per_row` at a time.
+Images are decoded, pixel-limited, re-encoded as PNG, deduplicated by path and
+given unique relationships. Empty `steps` keeps only the two header rows.
+Output is atomic; `overwrite=true` replaces an existing file.
 
 ## Security boundary
 

@@ -48,6 +48,10 @@ interactive REPL/TUI.
   `index` or use the pre-tool_calls shape no longer lose or merge calls.
 
 ### Extensions
+- Add `docx_render` for table-based business reports: it clones the prototype
+  step row, replaces policy/title/step text, inserts and dedupes images with
+  unique relationships, and preserves the template's table widths and run
+  formatting.
 - Infer tuios `run` mode from the pane: a remote (SSH/mosh) pane runs a
   command body as a script, an explicit `mode:"command"` there is refused
   before any pane write, and unknown-run hints differ for remote and local

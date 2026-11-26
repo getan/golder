@@ -69,7 +69,7 @@ func run(args []string, out, errOut io.Writer) error {
 			"transport = \"stdio\"\n"+
 			"command = %s\n"+
 			"args = [\"serve\"]\n"+
-			"allowed_tools = [\"docx_read\", \"docx_create\", \"docx_edit\"]\n"+
+			"allowed_tools = [\"docx_read\", \"docx_create\", \"docx_edit\", \"docx_render\"]\n"+
 			"call_timeout = \"30s\"\n"+
 			"network = false\n", strconv.Quote(exe))
 		return nil

@@ -649,7 +649,7 @@ func (c *Controller) configureDocxPackage(pkg extensions.ManagedPackage) error {
 	defer release()
 	cfg := extensions.SourceConfig{
 		Enabled: false, Transport: "stdio", Command: pkg.Executable,
-		Args: []string{"serve"}, AllowedTools: []string{"docx_read", "docx_create", "docx_edit"},
+		Args: []string{"serve"}, AllowedTools: []string{"docx_read", "docx_create", "docx_edit", "docx_render"},
 		CallTimeout: "30s", Network: false,
 	}
 	return manager.ReplaceSourceConfig(docxSourceRef, cfg)

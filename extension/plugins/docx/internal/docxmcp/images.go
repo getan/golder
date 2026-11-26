@@ -6,6 +6,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
+	"path"
 
 	"github.com/mmonterroca/docxgo/v2/domain"
 )
@@ -19,6 +20,15 @@ type loadedImage struct {
 // loadImage decodes the image fully and re-encodes it as PNG. Re-encoding drops
 // metadata and any trailing payload; the pixel bound is checked before decode.
 func (p *Plugin) loadImage(rel string) (*loadedImage, error) {
+	return p.loadImageAt(rel, "")
+}
+
+// loadImageAt reads an image below root, a workspace-relative directory. The
+// image name itself is still cleaned and confined by ReadImage.
+func (p *Plugin) loadImageAt(rel, root string) (*loadedImage, error) {
+	if root != "" && root != "." {
+		rel = path.Join(root, rel)
+	}
 	_, data, err := p.ws.ReadImage(rel)
 	if err != nil {
 		return nil, err

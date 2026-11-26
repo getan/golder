@@ -1,11 +1,11 @@
 ---
 name: docx
-description: Read, create or edit Microsoft Word .docx files in the workspace with the golder-docx MCP tools. Handles headings, paragraphs, bullets, tables and images; rejects macros, encrypted packages and embedded objects.
+description: Read, create, edit or render Microsoft Word .docx files in the workspace with the golder-docx MCP tools. Handles headings, paragraphs, bullets, tables and images, plus table-based report templates; rejects macros, encrypted packages and embedded objects.
 ---
 
 # DOCX documents
 
-Use the available `docx_read`, `docx_create` and `docx_edit` tools. Paths are
+Use the available `docx_read`, `docx_create`, `docx_edit` and `docx_render` tools. Paths are
 always relative to the project workspace and must end in `.docx`.
 
 ## Workflow
@@ -17,7 +17,11 @@ always relative to the project workspace and must end in `.docx`.
 3. To fill or extend an existing document, call `docx_edit` with literal
    `replacements` and/or `append` blocks. Write to a new output path unless the
    user explicitly asks to replace the original.
-4. Re-read the output when the user needs confirmation that the content landed.
+4. To fill a table-based report template, call `docx_render` with
+   `data.policyNo`, `data.title` and `data.steps`; each step has a description
+   and optional images. Use `images_per_row` and `image_width_px` to control
+   the screenshot layout.
+5. Re-read the output when the user needs confirmation that the content landed.
 
 ## Block model
 
@@ -70,5 +74,22 @@ Fill a template:
   "path": "templates/letter.docx",
   "output": "out/letter.docx",
   "replacements": {"{{name}}": "Alice", "{{date}}": "2026-11-25"}
+}
+```
+
+Render a step report:
+
+```json
+{
+  "path": "templates/report.docx",
+  "output": "out/report.docx",
+  "data": {
+    "policyNo": "P-123",
+    "title": "投保流程",
+    "steps": [
+      {"description": "1.提示进入投保流程", "images": ["shots/1.png"]},
+      {"description": "2.填写被保人信息", "images": ["shots/2a.png", "shots/2b.png"]}
+    ]
+  }
 }
 ```
