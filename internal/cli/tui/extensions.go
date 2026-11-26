@@ -285,6 +285,18 @@ func (m Model) extensionDetailPage(ref extensions.SourceRef, page string, drill 
 				info = append(info, pickInfoLine{Label: "Helper", Value: value})
 			}
 		}
+		var docxHelper docxHelperInfo
+		hasDocxHelper := false
+		if ref.Kind == "mcp" && ref.ID == "docx" && cfgErr == nil {
+			if helper, ok := m.docxHelperInfo(cfg); ok {
+				docxHelper, hasDocxHelper = helper, true
+				value := helper.ActiveVersion
+				if helper.UpdateAvailable {
+					value += " · " + helper.ExpectedVersion + " available"
+				}
+				info = append(info, pickInfoLine{Label: "Helper", Value: value})
+			}
+		}
 		var rows []pickItem
 		add := func(title, op string) {
 			rows = append(rows, pickItem{Title: title, Value: extensionValue("action", ref.Kind, op, ref.ID), Info: info})
@@ -324,6 +336,9 @@ func (m Model) extensionDetailPage(ref extensions.SourceRef, page string, drill 
 			add("Browse tools", "tools")
 			if hasLarkHelper && larkHelper.UpdateAvailable {
 				rows = append(rows, pickItem{Title: fmt.Sprintf("Update helper %s → %s…", larkHelper.ActiveVersion, larkHelper.ExpectedVersion), Value: extensionValue("lark-helper-update"), Info: info})
+			}
+			if hasDocxHelper && docxHelper.UpdateAvailable {
+				rows = append(rows, pickItem{Title: fmt.Sprintf("Update helper %s → %s…", docxHelper.ActiveVersion, docxHelper.ExpectedVersion), Value: extensionValue("docx-helper-update"), Info: info})
 			}
 			if strings.Contains(s.Type, "legacy") {
 				rows = append(rows, pickItem{Title: fmt.Sprintf("Commands: %d (not directly executed) · events: %s (metadata only)", len(s.Commands), strings.Join(s.Events, ", ")), Heading: true})
@@ -390,6 +405,8 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		return m.beginLarkWizard()
 	case "lark-helper-update":
 		return m.confirmLarkHelperUpdate()
+	case "docx-helper-update":
+		return m.beginDocxUpdate()
 	case "lark-helper-confirm":
 		return m.updateLarkHelperConfirmed()
 	case "mcp-edit":
@@ -446,7 +463,14 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 			info := []pickInfoLine{{Label: "Package", Value: p.Name}, {Label: "Type", Value: p.Type}, {Label: "Status", Value: p.State}, {Label: "Executable", Value: p.Executable}, {Label: "Description", Value: p.Description}, {Label: "Next", Value: p.NextAction}, {Label: "Docs", Value: p.Docs}, {Label: "Authority", Value: "visibility installs, configures, enables, and executes nothing"}}
 			rows := []pickItem{}
 			if p.ID == "docx" {
-				rows = append(rows, pickItem{Title: "Install & enable DOCX…", Status: "downloads and enables", Value: extensionValue("docx-install"), Info: info})
+				title, status, value := "Install & enable DOCX…", "downloads and enables", extensionValue("docx-install")
+				if p.Version != "" {
+					title, status = "Configure & enable DOCX…", "writes and enables"
+				}
+				if current, target, ok := m.docxPackageUpdate(); ok {
+					title, status, value = fmt.Sprintf("Update DOCX helper %s → %s…", current, target), "downloads and re-enables", extensionValue("docx-update")
+				}
+				rows = append(rows, pickItem{Title: title, Status: status, Value: value, Info: info})
 			}
 			rows = append(rows, pickItem{Title: "Back", Value: extensionValue("back"), Info: info})
 			m.menu.openPickerDrill(rows, "", "extensions")
@@ -507,6 +531,8 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "docx-install":
 		return m.beginDocxInstall()
+	case "docx-update":
+		return m.beginDocxUpdate()
 	case "action":
 		if len(v) >= 4 {
 			if v[1] == "mcp" && v[3] == "lark" && (v[2] == "setup" || v[2] == "connect") {

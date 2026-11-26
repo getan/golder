@@ -11,7 +11,10 @@ import (
 	"github.com/getan/golder/internal/extensions"
 )
 
-var docxSourceRef = extensions.SourceRef{Kind: "mcp", ID: "docx"}
+var (
+	docxSourceRef      = extensions.SourceRef{Kind: "mcp", ID: "docx"}
+	installDocxRelease = extensions.InstallDocxReleaseWithProgress
+)
 
 // docxInstallWizard is the TUI's explicit install/enable path for the
 // first-party DOCX helper. The release download uses the same checksum and
@@ -20,11 +23,85 @@ var docxSourceRef = extensions.SourceRef{Kind: "mcp", ID: "docx"}
 type docxInstallWizard struct {
 	phase    string // confirm, installing, cancelling, done, error
 	version  string
+	update   bool
+	current  string
+	target   string
 	progress string
 	err      string
 	enabled  bool
 	cancel   context.CancelFunc
 	events   <-chan tea.Msg
+}
+
+type docxHelperInfo struct {
+	ActiveVersion   string
+	ExpectedVersion string
+	Release         extensions.DocxRelease
+	UpdateAvailable bool
+}
+
+// docxHelperInfo reports the managed helper the configured source runs and the
+// helper this build expects. ok is false for an unmanaged command.
+func (m Model) docxHelperInfo(cfg extensions.SourceConfig) (docxHelperInfo, bool) {
+	pkg, managed := extensions.ManagedPackageForExecutable("docx", cfg.Command)
+	if !managed {
+		return docxHelperInfo{}, false
+	}
+	info := docxHelperInfo{ActiveVersion: pkg.Version, ExpectedVersion: extensions.DocxHelperVersion()}
+	release, err := extensions.DocxReleaseFor(m.opts.Version)
+	if err != nil || release.Version == "" || release.Version == "dev" || release.Version == "unknown" {
+		return info, true
+	}
+	info.ExpectedVersion = release.Version
+	info.Release = release
+	info.UpdateAvailable = release.Version != pkg.Version
+	return info, true
+}
+
+// docxPackageUpdate reports an installed package that differs from the helper
+// carried by the running Golder release.
+func (m Model) docxPackageUpdate() (current, target string, ok bool) {
+	pkg, installed := extensions.InstalledManagedPackage("docx")
+	if !installed {
+		return "", "", false
+	}
+	release, err := extensions.DocxReleaseFor(m.opts.Version)
+	if err != nil || release.Version == "" || release.Version == pkg.Version {
+		return "", "", false
+	}
+	return pkg.Version, release.Version, true
+}
+
+func (m Model) beginDocxUpdate() (tea.Model, tea.Cmd) {
+	if m.opts.Extensions == nil {
+		m.transcript.addSystem("Extensions unavailable.")
+		return m, nil
+	}
+	if m.running {
+		m.transcript.addSystem("Finish the current run before updating the DOCX helper.")
+		m.menu.close()
+		m.relayout()
+		return m, nil
+	}
+	current, target := "", ""
+	if cfg, err := m.opts.Extensions.Config(docxSourceRef); err == nil {
+		if helper, ok := m.docxHelperInfo(cfg); ok && helper.UpdateAvailable {
+			current, target = helper.ActiveVersion, helper.ExpectedVersion
+		}
+	}
+	if current == "" || target == "" {
+		current, target, _ = m.docxPackageUpdate()
+	}
+	if current == "" || target == "" {
+		m.transcript.addSystem("No DOCX helper update is available.")
+		m.menu.close()
+		m.relayout()
+		return m, nil
+	}
+	m.menu.close()
+	m.docxWizard = &docxInstallWizard{phase: "confirm", version: m.opts.Version, update: true, current: current, target: target}
+	m.relayout()
+	return m, nil
 }
 
 type docxInstallEventMsg struct {
@@ -101,7 +178,7 @@ func (m Model) startDocxInstall() (tea.Model, tea.Cmd) {
 			}
 		}
 
-		pkg, err := extensions.InstallDocxReleaseWithProgress(ctx, version, func(p extensions.DocxDownloadProgress) {
+		pkg, err := installDocxRelease(ctx, version, func(p extensions.DocxDownloadProgress) {
 			send(docxTUIProgress(p))
 		})
 		if err != nil {
@@ -160,7 +237,11 @@ func (m Model) finishDocxInstall(msg docxInstallEventMsg) (tea.Model, tea.Cmd) {
 	}
 	w.enabled, w.phase = true, "done"
 	prompts.SyncExtensionSkills(m.slash, m.opts.Extensions)
-	m.transcript.addSystem("DOCX helper installed and the reviewed MCP source is enabled.")
+	if w.update {
+		m.transcript.addSystem("DOCX helper updated and the reviewed MCP source is enabled.")
+	} else {
+		m.transcript.addSystem("DOCX helper installed and the reviewed MCP source is enabled.")
+	}
 	return m, nil
 }
 
@@ -218,6 +299,8 @@ func (w *docxInstallWizard) view() string {
 		release, err := extensions.DocxReleaseFor(w.version)
 		if err != nil {
 			b.WriteString("  " + err.Error() + "\n  Install a matching release build or use the GUI.\n")
+		} else if w.update {
+			fmt.Fprintf(&b, "  Update the verified DOCX helper %s → %s?\n  %s\n\n  Enter update & enable · Esc cancel", w.current, w.target, release.ArchiveURL)
 		} else {
 			fmt.Fprintf(&b, "  Install the verified DOCX helper %s?\n  %s\n\n  Enter install & enable · Esc cancel", release.Version, release.ArchiveURL)
 		}
@@ -226,9 +309,17 @@ func (w *docxInstallWizard) view() string {
 	case "cancelling":
 		b.WriteString("  Cancelling; waiting for cleanup…")
 	case "done":
-		b.WriteString("  DOCX is installed and enabled. Enter opens the MCP source · Esc closes.")
+		if w.update {
+			b.WriteString("  DOCX is updated and enabled. Enter opens the MCP source · Esc closes.")
+		} else {
+			b.WriteString("  DOCX is installed and enabled. Enter opens the MCP source · Esc closes.")
+		}
 	case "error":
-		b.WriteString("  Installation failed. Enter retries · Esc closes.")
+		if w.update {
+			b.WriteString("  Update failed. Enter retries · Esc closes.")
+		} else {
+			b.WriteString("  Installation failed. Enter retries · Esc closes.")
+		}
 	}
 	if w.err != "" {
 		b.WriteString("\n\n  Error: " + extensions.DisplayText(w.err, 1024))

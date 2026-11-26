@@ -52,6 +52,10 @@ interactive REPL/TUI.
   step row, replaces policy/title/step text, inserts and dedupes images with
   unique relationships, and preserves the template's table widths and run
   formatting.
+- Show a DOCX helper update action in the TUI package and source details when
+  the installed helper differs from the bundled 1.1.0 helper. Updating
+  downloads the verified release, rewrites the source with `docx_render`, and
+  re-enables it after the explicit confirmation.
 - Infer tuios `run` mode from the pane: a remote (SSH/mosh) pane runs a
   command body as a script, an explicit `mode:"command"` there is refused
   before any pane write, and unknown-run hints differ for remote and local

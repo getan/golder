@@ -24,6 +24,9 @@ import (
 
 var docxReleaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
+// DocxHelperVersion is the helper version this build expects.
+func DocxHelperVersion() string { return docxversion.Version }
+
 // DocxRelease identifies the exact first-party DOCX helper package a user is
 // asked to download. Discovery never downloads or executes it.
 type DocxRelease struct {
