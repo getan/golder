@@ -304,6 +304,7 @@ func (m Model) beginPasteEdit() (tea.Model, tea.Cmd) {
 	m.pasteEdit = &pasteEdit{id: target, draft: m.input.Value(), preview: m.pastePreview}
 	m.pastePreview = nil
 	m.menu.close()
+	m.fileMenu.close()
 	m.input.SetValue(body)
 	m.relayout()
 	return m, nil

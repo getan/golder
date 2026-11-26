@@ -11,6 +11,14 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### TUI
+- Add `@` local-file completion to the composer. Type `@` to open a file
+  picker over the session's working directory, fuzzy-match paths, and insert
+  the selected file or directory with Tab/Enter. The index prefers
+  `rg --files` (honoring `.gitignore`) and falls back to a bounded Go walk;
+  plugins, skills and connectors are intentionally excluded, and `@image:`
+  references are left alone.
+
 ### Runtime permissions
 - Treat sandbox, network and risk-reviewer refusals as one-shot decisions,
   not permanent bans. Only a recorded file-path refusal persists for the

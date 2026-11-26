@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -147,6 +148,31 @@ func (in *input) SetValue(s string) {
 	in.ta.SetValue(s)
 }
 
+// SetValueCursor replaces the buffer and parks the caret at byteOffset (a byte
+// index into s). SetValue leaves the caret at the end, which is right for
+// completing a slash command but wrong for replacing an @token in the middle of
+// a draft.
+func (in *input) SetValueCursor(s string, byteOffset int) {
+	if byteOffset < 0 {
+		byteOffset = 0
+	}
+	if byteOffset > len(s) {
+		byteOffset = len(s)
+	}
+	for byteOffset > 0 && byteOffset < len(s) && !utf8.RuneStart(s[byteOffset]) {
+		byteOffset--
+	}
+	in.ta.SetValue(s)
+	line := strings.Count(s[:byteOffset], "\n")
+	lineStart := strings.LastIndex(s[:byteOffset], "\n") + 1
+	col := utf8.RuneCountInString(s[lineStart:byteOffset])
+	lastLine := strings.Count(s, "\n")
+	for i := lastLine; i > line; i-- {
+		in.ta.CursorUp()
+	}
+	in.ta.SetCursorColumn(col)
+}
+
 // Clear empties the buffer and resets the cursor to the start.
 func (in *input) Clear() {
 	in.ta.Reset()
@@ -173,6 +199,38 @@ func (in input) LineCount() int { return in.ta.LineCount() }
 // is what makes it usable for offset arithmetic: a caller can reconstruct the
 // caret's byte offset in the buffer without redoing the editor's wrapping.
 func (in input) Column() int { return in.ta.Column() }
+
+// CursorByte reports the caret as a byte offset into Value. textarea exposes
+// logical (line, rune-column) coordinates; the @ completion code needs byte
+// ranges so it can replace exactly the active token without disturbing text
+// before or after it.
+func (in input) CursorByte() int {
+	value := in.ta.Value()
+	row, col := in.ta.Line(), in.ta.Column()
+	if row < 0 {
+		row = 0
+	}
+	lines := strings.Split(value, "\n")
+	if row >= len(lines) {
+		return len(value)
+	}
+	offset := 0
+	for i := 0; i < row; i++ {
+		offset += len(lines[i]) + 1
+	}
+	runes := []rune(lines[row])
+	if col < 0 {
+		col = 0
+	}
+	if col > len(runes) {
+		col = len(runes)
+	}
+	offset += len(string(runes[:col]))
+	if offset > len(value) {
+		return len(value)
+	}
+	return offset
+}
 
 // SetWidth resizes the editor to the terminal width so wrapping and the prompt
 // column line up with the rest of the shell.

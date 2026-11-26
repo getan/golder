@@ -41,6 +41,7 @@ func (m Model) beginHistorySearch() (tea.Model, tea.Cmd) {
 	m.ensureHistoryLoaded()
 	m.histSearch = &histSearch{originalDraft: m.input.Value(), cursor: -1}
 	m.menu.close()
+	m.fileMenu.close()
 	m.relayout()
 	return m, nil
 }

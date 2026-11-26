@@ -228,6 +228,10 @@ type Model struct {
 	// It filters slash by the typed prefix; the model intercepts arrow/Tab/Enter
 	// keys to drive it before delegating to the textarea.
 	menu slashMenu
+	// fileMenu is the `@` file-completion popup. It searches the session's
+	// working directory (local files only) and shares the slash menu's overlay
+	// slot; the model intercepts its navigation keys before the textarea.
+	fileMenu fileMenu
 
 	// toolCards indexes the rich tool-call cards (#389, US-006) by tool-call id so
 	// a toolEndMsg can locate the card started earlier and flip its state / attach
@@ -404,6 +408,7 @@ func NewModel(opts Options) Model {
 		remoteTerminal:    remote,
 		noTerminalQueries: startupQueriesDisabled(),
 		menu:              newSlashMenu(theme),
+		fileMenu:          newFileMenu(theme),
 		spinner:           newSpinner(theme),
 		pastes:            make(map[int]string),
 		images:            make(map[int]string),
@@ -1459,6 +1464,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.ReadClipboard
 
+	case fileIndexMsg:
+		// The @ picker's asynchronous index build finished. Stale results are
+		// ignored by handleFileIndex when the session root changed.
+		return m.handleFileIndex(msg)
+
 	case tea.KeyPressMsg:
 		// Never spend another entrance frame once the person starts interacting.
 		// Keep handling this same key: stopping the animation must not eat input.
@@ -2114,7 +2124,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// reader pressing PageDown should get a page, not silence. The slash menu
 	// wins the slot when it is open (it is the composer's own popup and Esc
 	// belongs to it).
-	if m.pastePreview != nil && !m.menu.active {
+	if m.pastePreview != nil && !m.menu.active && !m.fileMenu.active {
 		switch msg.String() {
 		case "esc":
 			m.pastePreview = nil
@@ -2146,6 +2156,40 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// opens on a "/prefix" the user is typing, and most commands are meaningful
 	// then (a model switch, /permissions, the /status family) — the ones that
 	// would disturb the run refuse themselves in runSlash.
+	if m.fileMenu.active {
+		switch msg.String() {
+		case "up", "ctrl+p":
+			m.fileMenu.moveUp()
+			m.relayout()
+			return m, nil
+		case "down", "ctrl+n":
+			m.fileMenu.moveDown()
+			m.relayout()
+			return m, nil
+		case "tab":
+			// Tab is the "insert this path" gesture; with no match there is
+			// nothing to complete and the key is consumed so it cannot fall
+			// through to slash completion.
+			if next, ok := m.insertFileSelection(); ok {
+				return next, nil
+			}
+			return m, nil
+		case "enter":
+			// Enter inserts the highlighted path. With no match it closes the
+			// popup and falls through to the normal submit path, matching
+			// codex: a bare "@" with no file selected is still submit-able.
+			if next, ok := m.insertFileSelection(); ok {
+				return next, nil
+			}
+			m.fileMenu.close()
+			m.relayout()
+		case "esc", "ctrl+c":
+			m.fileMenu.dismiss()
+			m.relayout()
+			return m, nil
+		}
+	}
+
 	if m.menu.active {
 		switch msg.String() {
 		case "up":
@@ -2238,6 +2282,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
 		m.menu.refresh(m.input.Value(), m.slash)
+		if fileCmd := m.refreshFileMenu(); fileCmd != nil {
+			cmd = tea.Batch(cmd, fileCmd)
+		}
 		m.relayout()
 		return m, cmd
 	}
@@ -2435,6 +2482,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// "/prefix" and no-ops while a picker owns the menu (see slashMenu.refresh),
 	// so a run in flight needs no special case.
 	m.menu.refresh(m.input.Value(), m.slash)
+	if fileCmd := m.refreshFileMenu(); fileCmd != nil {
+		cmd = tea.Batch(cmd, fileCmd)
+	}
 	m.relayout()
 	return m, cmd
 }
@@ -2515,6 +2565,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.remoteEcho("\n> " + prompt + "\n")
 	m.input.Clear()
 	m.menu.close()
+	m.fileMenu.close()
 	m.relayout()
 	return m.startPrompt(prompt)
 }
@@ -2561,6 +2612,7 @@ func (m Model) queueMidRun(prompt string) (tea.Model, tea.Cmd) {
 	m.steerQ.push(prompt)
 	m.input.Clear()
 	m.menu.close()
+	m.fileMenu.close()
 	m.relayout()
 	return m, nil
 }
@@ -3985,6 +4037,7 @@ const quitArmWindow = 3 * time.Second
 func (m Model) clearDraft() Model {
 	m.input.Clear()
 	m.menu.close()
+	m.fileMenu.close()
 	m.histIdx = len(m.history)
 	m.histDraft = ""
 	m.pastes = make(map[int]string)
@@ -4074,6 +4127,9 @@ func (m Model) feedInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	m.menu.refresh(m.input.Value(), m.slash)
+	if fileCmd := m.refreshFileMenu(); fileCmd != nil {
+		cmd = tea.Batch(cmd, fileCmd)
+	}
 	m.relayout()
 	return m, tea.Batch(cmd, reassertKeyboardProtocol())
 }
@@ -4357,6 +4413,14 @@ func (m Model) renderContent() (string, int) {
 		b.WriteString(dialog)
 		b.WriteByte('\n')
 		inputRow += countRows(dialog)
+	} else if menu := m.fileMenu.view(width); menu != "" {
+		// The @ file picker and the slash menu share the overlay slot. They are
+		// mutually exclusive in practice (an @token only appears in prompt text,
+		// never in a /name being completed), so the file picker wins if both
+		// states ever overlap.
+		b.WriteString(menu)
+		b.WriteByte('\n')
+		inputRow += countRows(menu)
 	} else if menu := m.menu.view(width); menu != "" {
 		// The autocomplete popup renders just above the input line as an
 		// overlay (it contributes no rows while idle, so the empty-shell
@@ -4695,6 +4759,9 @@ func (m *Model) relayout() {
 	// Match renderContent's mutually exclusive overlay slot. A hidden menu
 	// must not reserve rows behind an approval dialog.
 	overlayRows := m.approvalRowsHeight()
+	if overlayRows == 0 {
+		overlayRows = m.fileMenu.rows(m.width)
+	}
 	if overlayRows == 0 {
 		overlayRows = m.menu.rows(m.width)
 	}
