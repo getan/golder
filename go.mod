@@ -143,6 +143,6 @@ require (
 // See third_party/ultraviolet/GOLDER_PATCHES.md for provenance and removal criteria.
 replace github.com/charmbracelet/ultraviolet => ./third_party/ultraviolet
 
-// Golder's fork adds ScrollState.AnchorBy, which keeps a wheel glide alive
-// while the transcript adjusts its offset for measured row heights.
-replace github.com/egoist/mygo => github.com/getan/mygo v0.10.1
+// Golder's fork adds ScrollState.AnchorBy and smooth fast flicks, which keep
+// a wheel glide alive and spread a flick's travel over a few frames.
+replace github.com/egoist/mygo => github.com/getan/mygo v0.10.2

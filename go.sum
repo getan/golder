@@ -124,6 +124,8 @@ github.com/getan/kitty-browse v0.2.17 h1:zdYaIKRifqHhD7dZX/Q2H05DQ+18/Wnf6PDQdKu
 github.com/getan/kitty-browse v0.2.17/go.mod h1:w8rQ2QjZ24EjoVhf8okrLkB//DaoB+sGKelKP5JntbI=
 github.com/getan/mygo v0.10.1 h1:18V5DxYgMDl8mDUJ5VI0oeLY+/ztSEcfWHcqP/HpZVI=
 github.com/getan/mygo v0.10.1/go.mod h1:dVav53PwF2xEotjf4oA5lTY2Jp2exgzyjLhbSXhbMwE=
+github.com/getan/mygo v0.10.2 h1:hbqGHEseGB92WIMKVmBefIYpn6rSCu5CAPC0AZ+mmbA=
+github.com/getan/mygo v0.10.2/go.mod h1:M9l8H3dNtckOTlEpDp8JrLNL5mXOYMpYqv3tLuyPylI=
 github.com/getan/tuios-mini v0.10.47 h1:jg5nKm35w/og6lrWyiJeboaN1ladDCRhogHH8ha6nH8=
 github.com/getan/tuios-mini v0.10.47/go.mod h1:LkQhwbjEeC0Gn7+0OLQgCQkdUdLYwrjyQFM7VmNSOQY=
 github.com/gliderlabs/ssh v0.3.8 h1:a4YXD1V7xMF9g5nTkdfnja3Sxy1PVDCj1Zg4Wb8vY6c=

@@ -29,6 +29,7 @@ import (
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/toolworker"
+	"github.com/egoist/mygo/ui"
 )
 
 var (
@@ -63,6 +64,9 @@ func main() {
 		}
 		return
 	}
+	// A transcript flicked with a trackpad moves by a line or more in one
+	// frame, which reads as a trail; glide fast flicks over a few frames.
+	ui.SetSmoothFlicks(true)
 	if err := configureTerminalLauncher(); err != nil {
 		fmt.Fprintf(os.Stderr, "golder-gui: terminal sandbox launcher: %v\n", err)
 	}
