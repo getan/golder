@@ -174,7 +174,7 @@ outer:
 		view.ToolCallID = m.approval.remoteCallID
 		out.Approvals = append(out.Approvals, view)
 	}
-	private := m.mcpWizard != nil || m.mcpOAuth != nil || m.larkWizard != nil || m.mcpRemoval != nil || m.larkUpdate != nil || m.extensionSetupText != ""
+	private := m.mcpWizard != nil || m.mcpOAuth != nil || m.larkWizard != nil || m.docxWizard != nil || m.mcpRemoval != nil || m.larkUpdate != nil || m.extensionSetupText != ""
 	return out, private
 }
 
@@ -339,7 +339,7 @@ func (m Model) handleMobileAction(msg mobileActionMsg) (tea.Model, tea.Cmd) {
 	switch msg.action.kind {
 	case "input":
 		text := strings.TrimSpace(msg.action.text)
-		if m.running || m.session.remote.pairing || m.startRunFn == nil || text == "" || strings.HasPrefix(text, "/") || strings.HasPrefix(text, "!") || ui.HasImageReferences(text) || m.mcpWizard != nil || m.mcpOAuth != nil || m.larkWizard != nil || m.mcpRemoval != nil || m.extensionSetupText != "" {
+		if m.running || m.session.remote.pairing || m.startRunFn == nil || text == "" || strings.HasPrefix(text, "/") || strings.HasPrefix(text, "!") || ui.HasImageReferences(text) || m.mcpWizard != nil || m.mcpOAuth != nil || m.larkWizard != nil || m.docxWizard != nil || m.mcpRemoval != nil || m.extensionSetupText != "" {
 			reply(errors.New("input unavailable; use the local TUI"))
 			return m, m.waitMobileAction()
 		}

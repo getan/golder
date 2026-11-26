@@ -444,7 +444,12 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 				continue
 			}
 			info := []pickInfoLine{{Label: "Package", Value: p.Name}, {Label: "Type", Value: p.Type}, {Label: "Status", Value: p.State}, {Label: "Executable", Value: p.Executable}, {Label: "Description", Value: p.Description}, {Label: "Next", Value: p.NextAction}, {Label: "Docs", Value: p.Docs}, {Label: "Authority", Value: "visibility installs, configures, enables, and executes nothing"}}
-			m.menu.openPickerDrill([]pickItem{{Title: "Back", Value: extensionValue("back"), Info: info}}, "", "extensions")
+			rows := []pickItem{}
+			if p.ID == "docx" {
+				rows = append(rows, pickItem{Title: "Install & enable DOCX…", Status: "downloads and enables", Value: extensionValue("docx-install"), Info: info})
+			}
+			rows = append(rows, pickItem{Title: "Back", Value: extensionValue("back"), Info: info})
+			m.menu.openPickerDrill(rows, "", "extensions")
 			m.relayout()
 			return m, nil
 		}
@@ -500,6 +505,8 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		m.extensionPreview = ""
 		m.relayout()
 		return m, nil
+	case "docx-install":
+		return m.beginDocxInstall()
 	case "action":
 		if len(v) >= 4 {
 			if v[1] == "mcp" && v[3] == "lark" && (v[2] == "setup" || v[2] == "connect") {

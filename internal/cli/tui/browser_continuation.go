@@ -334,5 +334,5 @@ func (m Model) browserContinuationEvent(msg tea.Msg) (tea.Model, tea.Cmd, bool) 
 }
 
 func (m Model) browserInputBlocked() bool {
-	return m.approval.active || m.mcpWizard != nil || m.mcpOAuth != nil || m.larkWizard != nil || m.mcpRemoval != nil || m.larkUpdate != nil || m.extensionSetupText != "" || m.resume.pending || m.remoteStarting || m.session != nil && m.session.remote != nil && m.session.remote.pairing
+	return m.approval.active || m.mcpWizard != nil || m.mcpOAuth != nil || m.larkWizard != nil || m.docxWizard != nil || m.mcpRemoval != nil || m.larkUpdate != nil || m.extensionSetupText != "" || m.resume.pending || m.remoteStarting || m.session != nil && m.session.remote != nil && m.session.remote.pairing
 }

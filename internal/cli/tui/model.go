@@ -143,6 +143,7 @@ type Model struct {
 	mcpOAuth            *mcpOAuthState
 	mcpOAuthEpoch       uint64
 	larkWizard          *larkSetupWizard // transient operator input; may contain credentials
+	docxWizard          *docxInstallWizard
 	mcpRemoval          *extensions.MCPEdit
 	larkUpdate          *larkHelperUpdate
 
@@ -1111,6 +1112,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.finishMCPAuthorization(msg)
 	case larkWizardDoneMsg:
 		return m.finishLarkWizardOperation(msg)
+	case docxInstallEventMsg:
+		return m.finishDocxInstall(msg)
 	case larkHelperDoneMsg:
 		return m.finishLarkHelperUpdate(msg)
 	case larkHelperProgressMsg:
@@ -2010,7 +2013,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// gate); when idle it is echoed as a user block and run — as a slash command
 		// if it starts with "/", else a normal prompt.
 		text := strings.TrimSpace(msg.text)
-		privateOperation := m.mcpWizard != nil || m.larkWizard != nil || m.mcpRemoval != nil || m.larkUpdate != nil || m.extensionSetupText != ""
+		privateOperation := m.mcpWizard != nil || m.larkWizard != nil || m.docxWizard != nil || m.mcpRemoval != nil || m.larkUpdate != nil || m.extensionSetupText != ""
 		if m.running || privateOperation || text == "" {
 			if text != "" {
 				if m.running {
@@ -2065,6 +2068,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.larkWizard != nil {
 		return m.handleLarkWizardKey(msg)
+	}
+	if m.docxWizard != nil {
+		return m.handleDocxInstallKey(msg)
 	}
 	// A pending tool-call approval owns every key except Ctrl+C: the decision
 	// must not be dismissed or answered accidentally, and typing behind it
@@ -4230,6 +4236,9 @@ func (m Model) view() tea.View {
 	}
 	if m.larkWizard != nil {
 		return tea.View{Content: m.larkWizard.view(), AltScreen: true}
+	}
+	if m.docxWizard != nil {
+		return tea.View{Content: m.docxWizard.view(), AltScreen: true}
 	}
 
 	content, inputRow := m.renderContent()

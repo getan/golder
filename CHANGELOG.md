@@ -40,6 +40,10 @@ interactive REPL/TUI.
   `index` or use the pre-tool_calls shape no longer lose or merge calls.
 
 ### Extensions
+- Add Install & enable DOCX to the TUI package detail. It downloads the
+  matching verified helper with mirror fallback, shows phase/byte progress,
+  writes a disabled mcp:docx source and enables it only through the reviewed
+  flow.
 - Add the `golder-docx` MCP stdio plugin: `docx_read`, `docx_create` and
   `docx_edit` for workspace-relative .docx files, including headings,
   paragraphs, bullets, tables and PNG/JPEG/GIF images. The plugin preflights

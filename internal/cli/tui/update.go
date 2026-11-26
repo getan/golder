@@ -115,7 +115,7 @@ func (m Model) finishUpdateCheck(msg updateCheckedMsg) (tea.Model, tea.Cmd) {
 		}
 		// Only a still-idle, explicitly requested command may open the picker.
 		// A result arriving while typing, approving or running only sets the hint.
-		if manual && !m.running && !m.approval.active && !m.menu.active && m.histSearch == nil && m.pasteEdit == nil && strings.TrimSpace(m.input.Value()) == "" && m.extensionSetupText == "" && m.mcpWizard == nil && m.mcpOAuth == nil && m.larkWizard == nil {
+		if manual && !m.running && !m.approval.active && !m.menu.active && m.histSearch == nil && m.pasteEdit == nil && strings.TrimSpace(m.input.Value()) == "" && m.extensionSetupText == "" && m.mcpWizard == nil && m.mcpOAuth == nil && m.larkWizard == nil && m.docxWizard == nil {
 			return m.openUpdatePicker()
 		}
 	} else if manual {
