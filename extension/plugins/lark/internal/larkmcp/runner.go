@@ -169,7 +169,7 @@ type Result struct {
 	// OutputPath is the absolute, workspace-confined file written by api
 	// --output. It is omitted for calls that produce no local file or only a
 	// dry-run preview.
-	OutputPath     string          `json:"output_path,omitempty"`
+	OutputPath string `json:"output_path,omitempty"`
 }
 
 // QueryInfo states what a search actually established. Zero is reported only
