@@ -22,8 +22,9 @@ and map to the installed CLI's documented flags. Check tool schemas, never guess
 new flags. For Project `ticket_search`, the optional assignee is only `"me"`,
 not a user ID, and it is not a comprehensive search for everyone related to an
 item. If a business operation is unavailable, inspect the CLI path with `cli_help`;
-it cannot query auth/config/install. Use `cli_raw` for raw resource commands and
-`file_transfer` for explicit workspace files. Skill examples are not MCP tools.
+it cannot query auth/config/install. Use `cli_raw` for raw resource commands
+(including `api` with method/path limits) and `file_transfer` for explicit
+workspace files. Skill examples are not MCP tools.
 
 ## Identity, authorization and safety
 

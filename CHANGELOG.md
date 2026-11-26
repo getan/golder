@@ -101,6 +101,12 @@ interactive REPL/TUI.
   rather than assuming native wheel momentum moves the viewport in headless CI.
 
 ### Lark extension
+- Fix `file_transfer` classifying `--file-extension` and `--file-name` as local
+  paths: only explicit path flags now require `{file}`, so `drive +export`
+  works. Expose the `lark-cli api` escape hatch through `cli_raw` with
+  GET/HEAD reads, `high_risk` for POST/PUT/PATCH, DELETE and auth/token
+  endpoints blocked, inline-only `--data`/`--params`, and workspace-confined
+  `--output`/`--file` paths. `cli_help` now accepts a trailing `--help`/`-h`.
 - Abort a GitHub or mirror helper download after 15 seconds without a byte, or
   sustained throughput below 50 KB/s, and fall through to the next source. The
   TUI shows the stage, downloaded/total bytes and source, refreshed every

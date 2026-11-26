@@ -10,18 +10,25 @@ Prefer named tools for supported common work. Otherwise:
    command discovery before help works.
 2. Read only that command's help; ensure targets, options and impact are clear.
 3. Use `cli_call` for Lark `+shortcuts` and Project business commands, or
-   `cli_raw` for raw resource API commands when no shortcut exists. Pass the
-   exact argv array and confirm=true. The host separately authorizes that call:
-   the reviewer decides in `auto`, while `ask` requests a person's confirmation.
-   Set `high_risk=true` only when help marks the command high-risk; the adapter
-   adds `--yes` after host authorization. Never bypass a denial.
-4. Use `file_transfer` for uploads/downloads. Its argv contains exactly one
+   `cli_raw` for raw resource API commands when no shortcut exists. `cli_raw`
+   also accepts `api <METHOD> <PATH>` for an endpoint with no typed command:
+   GET/HEAD are reads, POST/PUT/PATCH need `high_risk=true`, and DELETE plus
+   auth/token endpoints are blocked. `--data`/`--params` are inline JSON only;
+   `--output` is workspace-relative, and `path` with `{file}` supplies a local
+   target; without `path`, `{file}` output goes to `.golder/artifacts`. Pass the
+   exact argv array and confirm=true. The host separately
+   authorizes that call: the reviewer decides in `auto`, while `ask` requests a
+   person's confirmation. Never bypass a denial.
+4. Use `file_transfer` for uploads/downloads. Only local-path flags such as
+   `--file`, `--output`, `--output-dir`, `--path` and `--dir` take exactly one
    `{file}` placeholder; `path` is workspace-relative and the adapter validates
-   it. Do not put `@file`, stdin, or local paths in `cli_call`/`cli_raw`.
+   it. Format/name flags such as `--file-extension` and `--file-name` pass
+   through. Do not put `@file`, stdin, or absolute output paths in
+   `cli_call`/`cli_raw`.
 5. Evaluate the result and perform a focused readback as needed. No write retries.
 
 The executable is fixed. No shell strings, pipes, executable paths, config/auth,
-installation, credentials, output-paths or identity changes. `--as` and
+installation, credentials, outputs outside the workspace or identity changes. `--as` and
 `--format` are adapter-controlled. Tool filtering may disable an aggregate entry
 entirely; use the named allowed tools instead. Do not search for an equivalent
 command to bypass a denial.

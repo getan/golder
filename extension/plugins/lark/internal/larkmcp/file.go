@@ -91,8 +91,14 @@ func validateFileArgs(args []string) error {
 		if localPathFlag(key) && !strings.Contains(value, "{file}") {
 			return fmt.Errorf("--%s must use the {file} placeholder", key)
 		}
+		if !localPathFlag(key) && strings.Contains(value, "{file}") {
+			return fmt.Errorf("--%s is not a local path parameter; move {file} to --output, --output-dir or another local path flag", key)
+		}
+		if key == "file-name" && !validOutputFileName(value) {
+			return fmt.Errorf("--%s must be a plain filename without a directory or traversal", key)
+		}
 		if remoteResourceFlag(key) {
-			if value == "" || !validRemoteIdentifier(value, strings.HasSuffix(key, "s")) {
+			if value == "" || !validRemoteIdentifier(value, remoteResourceIsList(key)) {
 				return fmt.Errorf("--%s must be an inline remote identifier, not a local file, URL or stdin reference", key)
 			}
 			continue
@@ -121,6 +127,9 @@ func flagSegments(key string) []string {
 // --key-file remains a local file parameter.
 func remoteResourceFlag(key string) bool {
 	segments := flagSegments(key)
+	if len(segments) > 1 && segments[len(segments)-1] == "list" {
+		segments = segments[:len(segments)-1]
+	}
 	if len(segments) == 0 {
 		return false
 	}
@@ -129,6 +138,16 @@ func remoteResourceFlag(key string) bool {
 		return true
 	}
 	return false
+}
+
+// remoteResourceIsList accepts both the plural suffix (--file-keys) and the
+// explicit -list suffix (--file-token-list) used by newer CLI flags.
+func remoteResourceIsList(key string) bool {
+	segments := flagSegments(key)
+	if len(segments) > 0 && segments[len(segments)-1] == "list" {
+		return true
+	}
+	return strings.HasSuffix(key, "s")
 }
 
 // validRemoteIdentifier accepts an inline server-side identifier such as
@@ -151,18 +170,39 @@ func validRemoteIdentifier(value string, list bool) bool {
 	return true
 }
 
-// localPathFlag reports whether a flag names a local filesystem path. Whole name
-// segments are classified instead of raw substrings, so a remote identifier such
-// as --file-key is not mistaken for the local --file or --output.
+// validOutputFileName accepts a file name, not a path. It is deliberately
+// stricter than the CLI: a preferred output name must not be able to escape the
+// adapter-selected directory through separators or traversal.
+func validOutputFileName(value string) bool {
+	name := strings.TrimSpace(value)
+	if name == "" || name == "." || name == ".." || filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return false
+	}
+	if strings.ContainsAny(name, `/\`) || strings.ContainsAny(name, "\x00\r\n") {
+		return false
+	}
+	return true
+}
+
+// localPathFlag reports whether a flag names a local filesystem path. This is an
+// explicit allowlist, not a substring test: format flags such as
+// --file-extension and --file-name contain "file" but are not paths, and
+// requiring {file} for them made `drive +export` impossible to call. Remote
+// identifiers (--file-key, --file-token) are classified first.
 func localPathFlag(key string) bool {
 	if remoteResourceFlag(key) {
 		return false
 	}
-	for _, segment := range flagSegments(key) {
-		for _, token := range []string{"file", "path", "output", "dir", "image", "audio", "video", "attachment", "media"} {
-			if strings.Contains(segment, token) {
-				return true
-			}
+	switch strings.ToLower(key) {
+	case "file", "output", "output-dir", "output-path", "dest", "destination",
+		"path", "save-path", "dir", "directory", "key-file", "file-path",
+		"attachment", "attachment-path", "media", "media-path",
+		"image", "audio", "video":
+		return true
+	}
+	for _, suffix := range []string{"-path", "-dir", "-file", "-attachment", "-media", "-image", "-audio", "-video"} {
+		if strings.HasSuffix(strings.ToLower(key), suffix) {
+			return true
 		}
 	}
 	return false
@@ -226,6 +266,17 @@ func resolveTransferPathIn(root, raw string, upload bool) (string, error) {
 	}
 	if !insideWorkspace(root, realParent) {
 		return "", errors.New("output path resolves outside the workspace")
+	}
+	// A pre-existing final symlink can point outside even when its parent is
+	// inside. The CLI opens the final component for writing, so resolve it too.
+	if info, err := os.Lstat(absolute); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		real, err := filepath.EvalSymlinks(absolute)
+		if err != nil {
+			return "", errors.New("output path is a symlink that cannot be resolved inside the workspace")
+		}
+		if !insideWorkspace(root, real) {
+			return "", errors.New("output path resolves outside the workspace")
+		}
 	}
 	return absolute, nil
 }

@@ -154,10 +154,28 @@ func TestFileTransferKeepsLocalPathBoundaries(t *testing.T) {
 			t.Fatalf("%s reached the runner: %v", tc.name, f.calls[before:])
 		}
 	}
+	// --file-name is a name, not a path, but it must not smuggle traversal into
+	// the output directory selected by the adapter.
+	body := `{"operation":"download","options":{"service":"lark","path":"out.docx","argv":["drive","+export","--file-extension","docx","--file-name","../escape.docx","--output-dir","{file}"]},"confirm":true}`
+	if r := p.Call(approved(), "file_transfer", json.RawMessage(body)); r.OK || r.Error == nil || !strings.Contains(r.Error.Message, "plain filename") {
+		t.Fatalf("file-name traversal was not rejected: %+v", r)
+	}
+}
+
+func TestCLICallAllowsDriveExportFormatFlag(t *testing.T) {
+	f := &fakeRunner{}
+	p := New(Config{}, f)
+	body := `{"service":"lark","argv":["drive","+export","--file-extension","docx"],"confirm":true}`
+	if r := p.Call(approved(), "cli_call", json.RawMessage(body)); !r.OK {
+		t.Fatalf("drive +export --file-extension was still blocked: %+v error=%+v", r, r.Error)
+	}
+	if len(f.calls) != 1 || !strings.Contains(f.calls[0], "--file-extension docx") {
+		t.Fatalf("drive +export call = %v", f.calls)
+	}
 }
 
 func TestFlagClassificationSeparatesRemoteKeysFromLocalPaths(t *testing.T) {
-	for _, key := range []string{"file-key", "file-keys", "image-key", "file-token", "cover-image-key", "message-id"} {
+	for _, key := range []string{"file-key", "file-keys", "image-key", "file-token", "file-token-list", "cover-image-key", "message-id"} {
 		if !remoteResourceFlag(key) || localPathFlag(key) {
 			t.Fatalf("%s should be a remote identifier", key)
 		}
@@ -166,6 +184,41 @@ func TestFlagClassificationSeparatesRemoteKeysFromLocalPaths(t *testing.T) {
 		if remoteResourceFlag(key) || !localPathFlag(key) {
 			t.Fatalf("%s should be a local path parameter", key)
 		}
+	}
+	for _, key := range []string{"file-extension", "file-name"} {
+		if remoteResourceFlag(key) || localPathFlag(key) {
+			t.Fatalf("%s is a format/name flag, not a path or remote identifier", key)
+		}
+	}
+}
+
+func TestBusinessFlagsAllowFormatAndNameFlags(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{"file extension", []string{"--file-extension=docx"}, ""},
+		{"file name", []string{"--file-name=report.docx"}, ""},
+		{"file name traversal", []string{"--file-name=../escape.docx"}, "plain filename"},
+		{"file name absolute", []string{"--file-name=/etc/passwd"}, "plain filename"},
+		{"file name placeholder", []string{"--file-name={file}"}, "not a local path"},
+		{"file token list", []string{"--file-token-list=a,b"}, ""},
+		{"local output remains blocked", []string{"--output=/tmp/x"}, "configuration, credential"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := businessFlags("lark", []string{"drive", "+export"}, tc.args)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("businessFlags() = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("businessFlags() = %v, want %q", err, tc.wantErr)
+			}
+		})
 	}
 }
 

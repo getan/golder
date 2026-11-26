@@ -20,7 +20,7 @@ func tailSchema(execute bool) json.RawMessage {
 	}
 	props := map[string]any{"service": map[string]any{"type": "string", "enum": []string{"lark", "project"}}, key: map[string]any{
 		"type": "array", "minItems": 0, "maxItems": 64,
-		"description": "Inline business arguments. Omit --as, --format, --yes, --force and --no-confirm; the adapter controls identity, output format and confirmation. For cli_help, an empty command returns root help. cli_help only covers business commands; it cannot query auth/config/install. Skill CLI examples are not MCP capabilities.",
+		"description": "Inline business arguments. For cli_raw, argv may also start with api <METHOD> <PATH>; omit --as/--format/--yes and use inline --data/--params JSON. Omit --as, --format, --yes, --force and --no-confirm; the adapter controls identity, output format and confirmation. For cli_help, an empty command returns root help and a trailing --help/-h is accepted. cli_help only covers business commands; it cannot query auth/config/install. Skill CLI examples are not MCP capabilities.",
 		"items":       map[string]any{"type": "string", "maxLength": 16000},
 	}}
 	required := []string{"service", key}
@@ -28,6 +28,7 @@ func tailSchema(execute bool) json.RawMessage {
 		props[key].(map[string]any)["minItems"] = 1
 		props["confirm"] = map[string]any{"type": "boolean", "const": true}
 		props["high_risk"] = map[string]any{"type": "boolean", "default": false, "description": "Set only when the CLI command is high-risk. The adapter appends --yes after exact-call host approval."}
+		props["path"] = text("cli_raw api only: optional workspace-relative local path for {file} in --file or --output. Output without path defaults to .golder/artifacts/lark-api-*.bin")
 		required = append(required, "confirm")
 	}
 	b, _ := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "properties": props, "required": required})
@@ -39,6 +40,7 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 		Service  string   `json:"service"`
 		Command  []string `json:"command"`
 		Argv     []string `json:"argv"`
+		Path     string   `json:"path"`
 		Confirm  bool     `json:"confirm"`
 		HighRisk bool     `json:"high_risk"`
 	}
@@ -49,15 +51,16 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 		if in.Service != "lark" && in.Service != "project" {
 			return failure(in.Service, "INVALID_ARGUMENTS", "cli_help needs service lark or project", "Use cli_help with service=lark or service=project; no command was executed")
 		}
-		if len(in.Command) == 0 {
+		command := stripHelpSuffix(in.Command)
+		if len(command) == 0 {
 			args := []string{"--help"}
 			out, err := p.Runner.Run(ctx, in.Service, args, nil)
 			return p.withCLIDiagnostics(normalize(in.Service, out, err, false), args, out, err)
 		}
-		if err := validateCommandPath(in.Service, in.Command, false); err != nil {
+		if err := validateCommandPath(in.Service, command, false); err != nil {
 			return failure(in.Service, "COMMAND_BLOCKED", err.Error(), "Use an empty command for root help, or a business/raw command family; for login or incremental scopes use Golder's Lark/Project authorization/settings entry; skill CLI examples are not MCP tools; no command was executed")
 		}
-		args := append(append([]string{}, in.Command...), "--help")
+		args := append(append([]string{}, command...), "--help")
 		out, err := p.Runner.Run(ctx, in.Service, args, nil)
 		return p.withCLIDiagnostics(normalize(in.Service, out, err, false), args, out, err)
 	}
@@ -71,6 +74,15 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 		return failure(in.Service, "COMMAND_BLOCKED", "Provide a business command and its operation", "Use cli_help")
 	}
 	business := name == "cli_call"
+	if in.Service == "lark" && len(in.Argv) > 0 && in.Argv[0] == "api" {
+		if business {
+			return failure("lark", "COMMAND_BLOCKED", "api is a raw escape hatch, not a Lark +shortcut", "Use cli_raw with service=lark for api <METHOD> <PATH>; the command was not executed")
+		}
+		return p.rawAPI(ctx, in.Argv, in.Path, in.HighRisk)
+	}
+	if in.Path != "" {
+		return failure(in.Service, "INVALID_ARGUMENTS", "path is only accepted for cli_raw api output or upload", "Omit path unless argv starts with api and uses {file}")
+	}
 	pathLen := 2
 	if !business {
 		pathLen = commandPathLen(in.Argv, 3)
@@ -98,6 +110,19 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 	knownRead := name == "cli_call" && ((in.Service == "lark" && in.Argv[0] == "drive" && in.Argv[1] == "+search") ||
 		(in.Service == "project" && in.Argv[0] == "url" && in.Argv[1] == "decode"))
 	return p.run(ctx, in.Service, in.Argv, !knownRead)
+}
+
+// stripHelpSuffix accepts the form callers naturally copy from CLI examples
+// (`drive +export --help`) instead of forcing a second help syntax on them.
+func stripHelpSuffix(command []string) []string {
+	for len(command) > 0 {
+		last := command[len(command)-1]
+		if last != "--help" && last != "-h" {
+			break
+		}
+		command = command[:len(command)-1]
+	}
+	return command
 }
 
 func validateCommandPath(service string, parts []string, business bool) error {
@@ -160,13 +185,19 @@ func businessFlags(service string, command, args []string) error {
 			if value == "" {
 				return fmt.Errorf("--%s requires an inline resource token", key)
 			}
-			if !validResourceValue(value, key == "folder-tokens") {
+			if !validResourceValue(value, remoteResourceIsList(key)) {
 				return fmt.Errorf("--%s must be an inline resource token, not a local file, URL or stdin reference", key)
 			}
 			continue
 		}
 		if blockedFlagKey(key) {
 			return fmt.Errorf("--%s is a configuration, credential, or local-file flag and is not exposed", key)
+		}
+		if !localPathFlag(key) && strings.Contains(value, "{file}") {
+			return fmt.Errorf("--%s is not a local path parameter; {file} is only for file_transfer", key)
+		}
+		if key == "file-name" && !validOutputFileName(value) {
+			return fmt.Errorf("--%s must be a plain filename without a directory or traversal", key)
 		}
 		if strings.HasPrefix(strings.TrimSpace(value), "@") || value == "-" || strings.ContainsAny(value, "\x00\r\n") {
 			return errors.New("local-file/stdin references are not allowed")
@@ -203,7 +234,9 @@ func parseBusinessFlags(args []string) ([]businessFlag, error) {
 }
 
 func resourceTokenFlag(key string) bool {
-	return key == "token" || key == "folder-tokens" || strings.HasSuffix(key, "-token") || strings.HasSuffix(key, "_token")
+	return key == "token" || key == "folder-tokens" ||
+		strings.HasSuffix(key, "-token") || strings.HasSuffix(key, "_token") ||
+		strings.HasSuffix(key, "-token-list") || strings.HasSuffix(key, "_token_list")
 }
 
 func blockedFlagKey(key string) bool {
@@ -212,15 +245,7 @@ func blockedFlagKey(key string) bool {
 			return true
 		}
 	}
-	if remoteResourceFlag(key) {
-		return false
-	}
-	for _, blocked := range []string{"file", "path", "output", "image", "audio", "video", "attachment", "media"} {
-		if strings.Contains(key, blocked) {
-			return true
-		}
-	}
-	return false
+	return localPathFlag(key)
 }
 
 func validResourceValue(value string, list bool) bool {

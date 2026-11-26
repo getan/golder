@@ -180,9 +180,17 @@ business command (for Project MQL use `{"service":"project","command":["workitem
 not the MCP tool name `ticket_search`); it cannot query auth/config/install, and
 skill CLI examples are not MCP capabilities. Availability depends on the installed
 CLI and Project login. `cli_call` invokes the fixed native binary with literal argv,
-never a shell. Auth/config/install, raw API, local-file/output paths, destructive
-bulk actions and permission/automation bypasses are blocked. A narrower tool deny
-disables the aggregate entry rather than leaving a way around that deny.
+never a shell. `cli_call` accepts Lark `+shortcuts`; `cli_raw` also exposes the
+`api <METHOD> <PATH>` escape hatch for endpoints without a typed command. `api`
+GET/HEAD are reads, POST/PUT/PATCH require `high_risk`, DELETE and auth/token
+endpoints stay blocked, `--data`/`--params` must be inline JSON, and `--output`
+is confined to the workspace; `-o {file}` without `path` lands in
+`.golder/artifacts`. `file_transfer` treats only local-path flags such
+as `--file`, `--output`, `--output-dir`, `--path` and `--dir` as `{file}`
+targets; format/name flags such as `--file-extension` and `--file-name` pass
+through. Auth/config/install, arbitrary output paths, destructive bulk actions
+and permission/automation bypasses are blocked. A narrower tool deny disables
+the aggregate entry rather than leaving a way around that deny.
 
 For the configured `mcp.lark` source (or an aliased stdio `golder-lark` source)
 and its write/confirmation tools, `auto`
