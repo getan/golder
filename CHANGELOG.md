@@ -105,6 +105,9 @@ interactive REPL/TUI.
   rather than assuming native wheel momentum moves the viewport in headless CI.
 
 ### Lark extension
+- Bump the bundled `golder-lark` helper to 1.5.72 so the file-flag and raw API
+  fixes ship as an independently versioned update. The helper was still 1.5.71
+  in v1.5.163, so existing installations could not detect that change.
 - Fix `file_transfer` classifying `--file-extension` and `--file-name` as local
   paths: only explicit path flags now require `{file}`, so `drive +export`
   works. Expose the `lark-cli api` escape hatch through `cli_raw` with
