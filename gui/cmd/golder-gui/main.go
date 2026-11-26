@@ -16,6 +16,7 @@ import (
 	stdruntime "runtime"
 	"strings"
 
+	"github.com/egoist/mygo/ui"
 	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/gui/mygoui"
 	"github.com/getan/golder/internal/agentcore"
@@ -29,7 +30,6 @@ import (
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/toolworker"
-	"github.com/egoist/mygo/ui"
 )
 
 var (
