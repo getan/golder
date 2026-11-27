@@ -72,6 +72,32 @@ func TestModelCtrlCArmExpires(t *testing.T) {
 	}
 }
 
+// TestModelQuitArmClearedByOtherInput covers an armed quit that is interrupted
+// by ordinary input. A split terminal report used to arrive as an Escape plus
+// text: the Escape armed a quit and the text was typed, leaving the arm live
+// for a later stray Escape to complete. Typing anything else must cancel the
+// arm, so that later Escape only re-arms.
+func TestModelQuitArmClearedByOtherInput(t *testing.T) {
+	m := NewModel(Options{})
+	esc := tea.KeyPressMsg{Code: tea.KeyEscape}
+	a := tea.KeyPressMsg{Code: 'a', Text: "a"}
+	armed, _ := m.Update(esc)
+	if armed.(Model).quitArmedAt.IsZero() {
+		t.Fatal("first Esc should arm the quit")
+	}
+	typed, _ := armed.Update(a)
+	if !typed.(Model).quitArmedAt.IsZero() {
+		t.Fatal("typing after the armed Esc should clear the quit arm")
+	}
+	again, cmd := typed.Update(esc)
+	if cmd != nil || again.(Model).quitting {
+		t.Fatal("an Esc after other input must only re-arm, not quit")
+	}
+	if again.(Model).quitArmedAt.IsZero() {
+		t.Fatal("the later Esc should arm a fresh quit")
+	}
+}
+
 // TestModelCtrlCClearsDraft verifies the shell-like first stage: Ctrl+C with a
 // non-empty composer discards the draft (and its paste/image placeholder
 // bodies) without arming a quit or producing a command, and only the later

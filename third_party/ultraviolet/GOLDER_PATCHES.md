@@ -21,6 +21,10 @@ Local changes:
   bytes returned alongside EOF, and respect cancellation while sending events.
   Win32 normalization now runs per complete record and counts source bytes,
   rather than mixing normalized lengths into the original input offsets.
+  A lone ESC is held for `BareEscTimeout` so a report split after its ESC can
+  join the introducer instead of becoming text; a tail that still arrives
+  later is decoded inside `EscTailWindow`, never typed. Any input that does
+  not identify a report releases the pending Escape immediately, in order.
 - `decoder.go`: accept the shorter eight-bit CSI X10 mouse prefix rather than
   indexing it as a six-byte seven-bit report (a fuzz-reproduced panic).
 - Regression tests exercise all split positions, delayed reads, malformed and
@@ -40,10 +44,12 @@ Local changes:
   while holding cells. `terminal_screen_sync_cursor_test.go` covers visible,
   hidden and nil final cursors. CJK/wide-cell repaint correctness is unchanged.
 
-A bare Esc keeps the upstream 50ms behavior. The seven-bit two-byte introducers
-also encode Alt+[ / Alt+] / Alt+O etc.; they get a separate one-second ambiguity
-window. Once a payload byte identifies a report it is retained until completion
-or explicit recovery, rather than reinterpreted as typing after a timer.
+A lone Esc waits 300ms for a possible report introducer; any following
+non-introducer input releases it at once, so typing after Esc is not delayed.
+The seven-bit two-byte introducers also encode Alt+[ / Alt+] / Alt+O etc.; they
+get a separate one-second ambiguity window. Once a payload byte identifies a
+report it is retained until completion or explicit recovery, rather than
+reinterpreted as typing after a timer.
 Report bodies are bounded at 4KiB (CSI/SS3) or 4MiB (control strings), bracketed
 pastes at 16MiB. An oversized frame/paste is discarded as a whole, never emitted
 as truncated input. A missing string terminator may require Esc or Ctrl+C to

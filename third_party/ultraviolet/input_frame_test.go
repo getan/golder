@@ -159,6 +159,258 @@ func TestInputDelayedFramesDoNotExpire(t *testing.T) {
 	}
 }
 
+// A report can lose its ESC across a read boundary: the ESC arrives first,
+// the introducer and payload follow after the ordinary Esc timeout. The ESC
+// must stay pending, join the introducer and decode as the original report —
+// not become an Escape key followed by the report's text ("0;14;40m").
+func TestInputSplitEscapeJoinsLateProtocolTail(t *testing.T) {
+	r, w := io.Pipe()
+	events := make(chan Event, 16)
+	d := NewTerminalReader(r, "xterm-256color")
+	d.EscTimeout = 5 * time.Millisecond
+	d.BareEscTimeout = 100 * time.Millisecond
+	go func() {
+		_, _ = io.WriteString(w, "\x1b")
+		time.Sleep(25 * time.Millisecond)
+		_, _ = io.WriteString(w, "[<0;14;40m")
+		_ = w.Close()
+	}()
+	if err := d.StreamEvents(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	var text strings.Builder
+	var escape, release bool
+	for e := range events {
+		switch e := e.(type) {
+		case KeyPressEvent:
+			if e.Code == KeyEscape {
+				escape = true
+				continue
+			}
+			text.WriteString(e.Text)
+		case MouseReleaseEvent:
+			release = true
+		}
+	}
+	if text.Len() != 0 {
+		t.Fatalf("late SGR mouse tail became text: %q", text.String())
+	}
+	if escape {
+		t.Fatal("the split ESC was also delivered as an Escape key")
+	}
+	if !release {
+		t.Fatal("the late SGR mouse release was not decoded")
+	}
+}
+
+// Tab is the key the reported SSH failure was typing when the sequence split:
+// a kitty CSI-u report must arrive as Tab, not as Escape plus "9;1u".
+func TestInputSplitEscapeJoinsKittyTab(t *testing.T) {
+	r, w := io.Pipe()
+	events := make(chan Event, 16)
+	d := NewTerminalReader(r, "xterm-256color")
+	d.EscTimeout = 5 * time.Millisecond
+	d.BareEscTimeout = 100 * time.Millisecond
+	go func() {
+		_, _ = io.WriteString(w, "\x1b")
+		time.Sleep(25 * time.Millisecond)
+		_, _ = io.WriteString(w, "[9;1u")
+		_ = w.Close()
+	}()
+	if err := d.StreamEvents(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	var text strings.Builder
+	var tab, escape bool
+	for e := range events {
+		if k, ok := e.(KeyPressEvent); ok {
+			switch k.Code {
+			case KeyTab:
+				tab = true
+			case KeyEscape:
+				escape = true
+			default:
+				text.WriteString(k.Text)
+			}
+		}
+	}
+	if escape || text.Len() != 0 {
+		t.Fatalf("split kitty Tab became escape=%t text=%q", escape, text.String())
+	}
+	if !tab {
+		t.Fatal("the split kitty Tab report did not decode as Tab")
+	}
+}
+
+// The pending ESC must not delay a following ordinary key: it is delivered
+// before that key, and the key itself is still typed.
+func TestInputSplitEscapeBeforeTextKeepsOrder(t *testing.T) {
+	r, w := io.Pipe()
+	events := make(chan Event, 16)
+	d := NewTerminalReader(r, "xterm-256color")
+	d.EscTimeout = 5 * time.Millisecond
+	d.BareEscTimeout = 100 * time.Millisecond
+	go func() {
+		_, _ = io.WriteString(w, "\x1b")
+		time.Sleep(25 * time.Millisecond)
+		_, _ = io.WriteString(w, "a")
+		_ = w.Close()
+	}()
+	if err := d.StreamEvents(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	var got []string
+	for e := range events {
+		if k, ok := e.(KeyPressEvent); ok {
+			got = append(got, k.String())
+		}
+	}
+	if !reflect.DeepEqual(got, []string{"esc", "a"}) {
+		t.Fatalf("split Esc then a = %v, want [esc a]", got)
+	}
+}
+
+// An isolated Esc is still delivered, after the extra grace period, rather
+// than being held forever waiting for a report that never comes.
+func TestInputLoneEscapeStillArrives(t *testing.T) {
+	r, w := io.Pipe()
+	events := make(chan Event, 8)
+	d := NewTerminalReader(r, "xterm-256color")
+	d.EscTimeout = 5 * time.Millisecond
+	d.BareEscTimeout = 20 * time.Millisecond
+	go func() {
+		_, _ = io.WriteString(w, "\x1b")
+		time.Sleep(60 * time.Millisecond)
+		_ = w.Close()
+	}()
+	if err := d.StreamEvents(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	var escape bool
+	for e := range events {
+		if k, ok := e.(KeyPressEvent); ok && k.Code == KeyEscape {
+			escape = true
+		}
+	}
+	if !escape {
+		t.Fatal("a lone Esc was not delivered after the grace period")
+	}
+}
+
+// A tail can arrive after BareEscTimeout as well. The Escape is already out,
+// but the tail must still be decoded as its report, never typed as text.
+func TestInputVeryLateProtocolTailIsNotTyped(t *testing.T) {
+	r, w := io.Pipe()
+	events := make(chan Event, 16)
+	d := NewTerminalReader(r, "xterm-256color")
+	d.EscTimeout = 5 * time.Millisecond
+	d.BareEscTimeout = 20 * time.Millisecond
+	d.EscTailWindow = 500 * time.Millisecond
+	go func() {
+		_, _ = io.WriteString(w, "\x1b")
+		time.Sleep(50 * time.Millisecond)
+		_, _ = io.WriteString(w, "[<0;14;40m")
+		_ = w.Close()
+	}()
+	if err := d.StreamEvents(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	var text strings.Builder
+	var release bool
+	for e := range events {
+		switch e := e.(type) {
+		case KeyPressEvent:
+			text.WriteString(e.Text)
+		case MouseReleaseEvent:
+			release = true
+		}
+	}
+	if text.Len() != 0 {
+		t.Fatalf("very late SGR mouse tail became text: %q", text.String())
+	}
+	if !release {
+		t.Fatal("the very late SGR mouse release was not decoded")
+	}
+}
+
+// A literal "[" typed after a real Escape is not a report. The recognizer is
+// narrower than the frame introducer for exactly this case.
+func TestInputEscapeThenTypedBracketStaysText(t *testing.T) {
+	r, w := io.Pipe()
+	events := make(chan Event, 16)
+	d := NewTerminalReader(r, "xterm-256color")
+	d.EscTimeout = 5 * time.Millisecond
+	d.BareEscTimeout = 20 * time.Millisecond
+	go func() {
+		_, _ = io.WriteString(w, "\x1b")
+		time.Sleep(50 * time.Millisecond)
+		_, _ = io.WriteString(w, "[x")
+		_ = w.Close()
+	}()
+	if err := d.StreamEvents(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	var text strings.Builder
+	var escape bool
+	for e := range events {
+		if k, ok := e.(KeyPressEvent); ok {
+			if k.Code == KeyEscape {
+				escape = true
+				continue
+			}
+			text.WriteString(k.Text)
+		}
+	}
+	if !escape || text.String() != "[x" {
+		t.Fatalf("Esc then typed [x = escape=%t text=%q, want escape and [x", escape, text.String())
+	}
+}
+
+// During the Esc grace window, bytes that could also begin a protocol frame
+// but do not identify a report must remain ordinary typing. Only report
+// prefixes may join a pending Escape.
+func TestInputHeldEscapeDoesNotSwallowTypedInput(t *testing.T) {
+	for _, typed := range []string{"P", "_", "^", "X", "[", "[x", "O", "Ox"} {
+		t.Run(typed, func(t *testing.T) {
+			r, w := io.Pipe()
+			events := make(chan Event, 16)
+			d := NewTerminalReader(r, "xterm-256color")
+			d.EscTimeout = 5 * time.Millisecond
+			d.BareEscTimeout = 100 * time.Millisecond
+			go func() {
+				_, _ = io.WriteString(w, "\x1b")
+				time.Sleep(25 * time.Millisecond)
+				_, _ = io.WriteString(w, typed)
+				_ = w.Close()
+			}()
+			if err := d.StreamEvents(context.Background(), events); err != nil {
+				t.Fatal(err)
+			}
+			close(events)
+			var got strings.Builder
+			var escape bool
+			for e := range events {
+				if k, ok := e.(KeyPressEvent); ok {
+					if k.Code == KeyEscape {
+						escape = true
+						continue
+					}
+					got.WriteString(k.Text)
+				}
+			}
+			if !escape || got.String() != typed {
+				t.Fatalf("Esc then typed %q = escape=%t text=%q", typed, escape, got.String())
+			}
+		})
+	}
+}
+
 type eofInput struct{ *bytes.Reader }
 
 func (r eofInput) Read(p []byte) (int, error) {
@@ -185,6 +437,8 @@ func TestInputBareEscapeAndCancellation(t *testing.T) {
 	defer cancel()
 	d := NewTerminalReader(r, "dumb")
 	d.EscTimeout = 5 * time.Millisecond
+	// This fixture is about a bare Esc, not the report-joining grace period.
+	d.BareEscTimeout = 20 * time.Millisecond
 	events := make(chan Event)
 	done := make(chan error, 1)
 	go func() { done <- d.StreamEvents(ctx, events) }()

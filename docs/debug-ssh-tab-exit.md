@@ -105,6 +105,7 @@ golder_debug_run
 | `tui completion begin` → `apply` → `end` | 进入补全、即将填入候选、补全返回。包含窗口尺寸、输入字节数、候选数、选中索引、运行/退出状态，不含候选名或输入。 |
 | `completion apply` 后没有 `end`，并有 `panic phase=tui.update` | 查看紧随的 `panic frame=… function=… line=…`；定位 SetValue / refresh 等实际失败位置，不要先修改 SSH。 |
 | `tui exit intent source=ctrl_d accepted=true` | 命中了明确的 Ctrl+D 退出分支，不等于内核发了 EOF。`accepted=false` 表示运行中拒绝退出。 |
+| `tui exit arm cleared by input` | 已 armed 的二次退出被其他按键、鼠标或粘贴取消；后续迟到 Esc 只会重新 arm，不会退出。 |
 | `source=double_interrupt` / `source=slash_exit` | 命中了双重中断或 `/exit` 分支。不是 Tab 自身的退出逻辑。 |
 | `input read … error_class=eof` | 底层输入结束，和已解码的 Ctrl+D 是两件事；检查 fd/TTY/SSH 生命周期。 |
 | `output end … error_class=broken_pipe` / `io_error` / `bad_fd` / `closed_file` | 输出或文件描述符异常；结合前后时间线判断，不直接归罪于某个组件。 |
@@ -144,9 +145,14 @@ golder_debug_run
 已有完整 CSI 前缀的保留策略不能消除裸 Esc 与一条尚未到达的协议报文之间的固有歧义。
 不能用正则删除普通的 `32;21;55M` 文本来补救，否则会破坏正常输入和粘贴。
 
+后续修复在共享输入解码器中给裸 Esc 一个 300ms 的报告合并窗口：只要后续输入不是可识别
+的报告前缀就立即按原顺序发出 Esc；超过窗口的尾部仍会在 500ms tail window 内按协议帧解码，
+不再成为普通文本。TUI 的二次退出确认也会被任何其他按键、鼠标或粘贴取消，因此即使
+仍有一次迟到 Esc，也不会再因为尾部文本加两个 Esc 而误触发 `double_interrupt`。
+
 在这个本机样本中，正常退出输出**包含**鼠标/键盘模式的关闭序列。现场失联后鼠标仍上报，
 还可能涉及关闭序列未能送达、程序/读取循环停止或客户端模式残留，须单独核对，不能把
-这个退出路径说成解释了全部现象。退出键策略修复仍待确认。
+这个退出路径说成解释了全部现象。退出键策略修复已实现，但仍待现场确认。
 
 若现场已经无法输入，先停止移动鼠标，使用终端应用的 **Reset/重置终端**（不是仅清屏），
 或新开终端标签再连接。不要在不知道当前输入交给谁的状态下盲贴恢复命令或真实凭据。

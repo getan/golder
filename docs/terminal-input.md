@@ -21,9 +21,13 @@ Typing or pasting the literal text `65;59M` still works.
 
 ## Behavior and limits
 
-- A bare Esc keeps its short timeout; two-byte introducers that could also be
-  Alt keys get a separate one-second ambiguity window. Once payload identifies
-  a protocol frame, its continuation is not flushed by a key timeout.
+- A lone Esc is held for 300ms for a possible report prefix. Any other
+  following input releases it immediately, so typing after Esc keeps its order
+  and feel; only an isolated Esc waits. If the ESC already expired, a report
+  tail arriving within the 500ms tail window is still decoded as a frame, not
+  typed. Two-byte introducers that could also be Alt keys get a separate
+  one-second ambiguity window. Once payload identifies a protocol frame, its
+  continuation is not flushed by a key timeout.
 - SGR/X10 mouse, CSI/SS3 keys and query responses, OSC, DCS, APC, PM and SOS are
   framed before semantic decoding, including split `ESC \\` terminators.
 - UTF-8 characters wait for their remaining bytes. Bracketed-paste content is
@@ -34,10 +38,10 @@ Typing or pasting the literal text `65;59M` still works.
   into input. The reader can resynchronize at a new escape sequence or an
   interrupt key. There is no second reader competing for stdin.
 - Bytes already missing their prefix cannot safely be distinguished from
-  intentionally typed text. No regex removes report-looking numbers or color
-  strings from a draft. A stalled, unterminated control string may need Esc or
-  Ctrl+C to recover. Very late bytes after an ambiguous bare Esc/Alt key has
-  expired remain intrinsically ambiguous.
+  intentionally typed text beyond the tail window. No regex removes
+  report-looking numbers or color strings from a draft. A stalled, unterminated
+  control string may need Esc or Ctrl+C to recover. Bytes arriving after the
+  tail window remain intrinsically ambiguous.
 
 ## Loading the fix
 

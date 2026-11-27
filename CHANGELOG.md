@@ -12,6 +12,12 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### TUI
+- **A split Esc no longer turns a mouse/key report into typed text or an
+  accidental double-Esc exit.** The shared terminal reader holds a lone Esc
+  for a short report-joining window, releases it immediately when the next
+  input is not an introducer, and still decodes a later tail as its frame
+  instead of typing `0;14;40m` / `2;5u`. The TUI also disarms a pending
+  two-stage quit as soon as any other key, mouse event or paste arrives.
 - Add `@` local-file completion to the composer. Type `@` to open a file
   picker over the session's working directory, fuzzy-match paths, and insert
   the selected file or directory with Tab/Enter. The index prefers

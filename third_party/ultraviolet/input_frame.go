@@ -41,6 +41,34 @@ func (f inputFrame) limit() int {
 	return maxInputSequence
 }
 
+// isProtocolTail reports whether b looks like the bytes that follow the ESC of
+// a terminal report. It is deliberately narrower than frameInput's introducer
+// set: a typed "[" or "X" after a real Escape must remain text, while SGR/X10
+// mouse, CSI-u keys, focus reports, mode/device/cursor replies and the known
+// string replies all match. The ESC itself is not in b.
+func isProtocolTail(b []byte) bool {
+	if len(b) < 2 {
+		return false
+	}
+	switch b[0] {
+	case '[':
+		switch b[1] {
+		case '<', 'M', 'I', 'O', '?':
+			return true
+		default:
+			return b[1] >= '0' && b[1] <= '9'
+		}
+	case ']':
+		return b[1] >= '0' && b[1] <= '9'
+	case '_':
+		return b[1] == 'G' // kitty graphics reply
+	case 'P':
+		return len(b) >= 3 && b[1] == '1' && b[2] == '+' // DCS capability reply
+	default:
+		return false
+	}
+}
+
 // frameInput recognizes boundaries, not event meaning. EventDecoder remains the
 // only decoder. Holding a frame here also protects recognized events such as
 // X10 mouse that the stateless decoder otherwise accepts before their payload.

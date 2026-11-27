@@ -25,6 +25,22 @@ var ErrReaderNotStarted = fmt.Errorf("reader not started")
 // process ESC sequences. It is set to 50 milliseconds.
 const DefaultEscTimeout = 50 * time.Millisecond
 
+// DefaultBareEscTimeout is how long a lone ESC is held after EscTimeout before
+// it is delivered as an Escape key. A terminal writes a report as one sequence,
+// but a pty read, an SSH hop or a workspace pane can split it between the ESC
+// and its introducer. When that happens after EscTimeout, the rest of the
+// report used to arrive as ordinary text ("0;14;40m", "2;5u"). Holding the
+// lone ESC lets the introducer join it and produce the mouse/key event the
+// terminal actually sent. Any following input that does not identify a report
+// ends the wait immediately, so typing after Esc is not delayed.
+const DefaultBareEscTimeout = 250 * time.Millisecond
+
+// DefaultEscTailWindow is how long a report tail is still recognized after a
+// lone ESC was delivered. A tail inside this window is decoded as a frame (and
+// kept out of the composer) even though the ESC itself already became an
+// Escape key.
+const DefaultEscTailWindow = 500 * time.Millisecond
+
 // TerminalReader represents an input event loop that reads input events from
 // a reader and parses them into human-readable events. It supports
 // reading escape sequences, mouse events, and bracketed paste mode.
@@ -47,6 +63,20 @@ type TerminalReader struct {
 	//
 	// By default, this is set to [DefaultEscTimeout] (50 milliseconds).
 	EscTimeout time.Duration
+
+	// BareEscTimeout is the extra time a lone ESC is held after EscTimeout
+	// while waiting for a protocol report. It covers a report whose ESC and
+	// payload were split by a pty read, SSH or a terminal multiplexer. Any
+	// input that does not identify a report ends the wait at once, so only an
+	// isolated Esc pays this delay. By default, this is [DefaultBareEscTimeout].
+	BareEscTimeout time.Duration
+
+	// EscTailWindow bounds how long after a lone ESC was delivered a following
+	// protocol tail is still treated as the rest of that report. The ESC has
+	// already become an Escape key by then, but decoding the tail as a frame
+	// keeps its bytes out of the composer. By default, this is
+	// [DefaultEscTailWindow].
+	EscTailWindow time.Duration
 
 	r     io.Reader
 	table map[string]Key // table is a lookup table for key sequences.
@@ -101,11 +131,13 @@ func NewTerminalReader(r io.Reader, termType string) *TerminalReader {
 		observedStart = time.Now()
 	}
 	d := &TerminalReader{
-		observer:   o,
-		EscTimeout: DefaultEscTimeout,
-		r:          r,
-		term:       termType,
-		lookup:     true, // Use lookup table by default.
+		observer:       o,
+		EscTimeout:     DefaultEscTimeout,
+		BareEscTimeout: DefaultBareEscTimeout,
+		EscTailWindow:  DefaultEscTailWindow,
+		r:              r,
+		term:           termType,
+		lookup:         true, // Use lookup table by default.
 	}
 	d.r = r
 	if d.table == nil {
@@ -158,6 +190,14 @@ func (d *TerminalReader) StreamEvents(ctx context.Context, eventc chan<- Event) 
 	timeout := time.NewTimer(d.EscTimeout)
 	timeout.Stop()
 	defer timeout.Stop()
+	// bareEsc is set when a lone ESC has reached EscTimeout. The byte stays in
+	// buf for BareEscTimeout so a report prefix arriving late can join it; any
+	// other input releases the Escape first, preserving key order.
+	bareEsc := false
+	// lateEsc is when a lone ESC was finally delivered. A report tail that
+	// arrives after BareEscTimeout is still decoded as a frame inside
+	// EscTailWindow, so its bytes are not typed as text.
+	var lateEsc time.Time
 	arm := func() {
 		timeout.Stop()
 		if wait := d.inputWait(buf.Bytes()); wait > 0 {
@@ -195,12 +235,51 @@ func (d *TerminalReader) StreamEvents(ctx context.Context, eventc chan<- Event) 
 			d.sendEvents(ctx, eventc, buf.Bytes(), true)
 			return err // return the first error encountered
 		case <-timeout.C:
+			if !bareEsc && len(buf.Bytes()) == 1 && buf.Bytes()[0] == ansi.ESC {
+				bareEsc = true
+				wait := d.BareEscTimeout
+				if wait <= 0 {
+					wait = DefaultBareEscTimeout
+				}
+				timeout.Reset(wait)
+				continue
+			}
+			bareEsc = false
 			// Only ambiguous keys expire. A recognized protocol continuation
 			// has no timer and the scanner will never turn its tail into keys.
-			buf.Next(d.sendEvents(ctx, eventc, buf.Bytes(), true))
+			lone := len(buf.Bytes()) == 1 && buf.Bytes()[0] == ansi.ESC
+			n := d.sendEvents(ctx, eventc, buf.Bytes(), true)
+			if lone && n == 1 {
+				lateEsc = time.Now()
+			} else {
+				lateEsc = time.Time{}
+			}
+			buf.Next(n)
 			arm()
 		case read := <-readc:
 			d.logf("input: %q", read)
+			if bareEsc {
+				bareEsc = false
+				// The ESC already waited out EscTimeout. Keep it only when
+				// this read identifies a report; a bare "[", "O" or a typed
+				// "[x" must not swallow the person's next keys.
+				if !isProtocolTail(read) {
+					buf.Next(d.sendEvents(ctx, eventc, buf.Bytes(), true))
+				}
+			}
+			if !lateEsc.IsZero() {
+				window := d.EscTailWindow
+				if window <= 0 {
+					window = DefaultEscTailWindow
+				}
+				if time.Since(lateEsc) <= window && isProtocolTail(read) {
+					// The ESC was already delivered as Escape, but these are
+					// its report bytes. Put the introducer back so the scanner
+					// decodes a frame rather than typing "0;14;40m".
+					buf.WriteByte(ansi.ESC)
+				}
+				lateEsc = time.Time{}
+			}
 			buf.Write(read)
 			buf.Next(d.sendEvents(ctx, eventc, buf.Bytes(), false))
 			arm()

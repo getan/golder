@@ -163,7 +163,8 @@ type Model struct {
 	// quitArmedAt marks when the first idle Ctrl+C/Esc armed a quit: a second
 	// press within quitArmWindow quits, otherwise the arm expires and the next
 	// press re-arms. Zero = disarmed. A single idle press must never quit —
-	// too easy to fat-finger away a session.
+	// too easy to fat-finger away a session. Any other key, mouse event or
+	// paste clears the arm (see disarmQuitOnInput).
 	quitArmedAt time.Time
 
 	// interruptRequested records that this run's interrupt has already been
@@ -1069,6 +1070,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m = m.disarmQuitOnInput(msg)
 	nextBrowser, browserCmd, browserHandled := m.browserContinuationEvent(msg)
 	m = nextBrowser.(Model)
 	if browserHandled {
@@ -4018,6 +4020,30 @@ func (m *Model) stepSeedMore(msg seedMoreMsg) tea.Cmd {
 		return nil
 	}
 	return seedMoreTick(m.seedMoreGen)
+}
+
+// disarmQuitOnInput cancels a pending two-stage quit when the person does
+// anything other than press the quit key again. Without this, a split terminal
+// report (an Escape followed by the rest of a mouse/key sequence) could arm a
+// quit, its text tail could arrive, and a later stray Escape would quit as
+// though the person had pressed the key twice on purpose.
+func (m Model) disarmQuitOnInput(msg tea.Msg) Model {
+	if m.quitArmedAt.IsZero() {
+		return m
+	}
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "esc", "ctrl+c":
+			return m
+		}
+	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg, tea.MouseWheelMsg, tea.PasteMsg:
+	default:
+		return m
+	}
+	diagtrace.Event("tui", "exit arm cleared by input")
+	m.quitArmedAt = time.Time{}
+	return m
 }
 
 // quitArmWindow is how long an armed quit stays live: a second idle Ctrl+C /

@@ -42,6 +42,35 @@ func TestE2EWorkspaceDoesNotTypeSplitMouseReportsIntoShell(t *testing.T) {
 	}
 }
 
+// The harder split is directly after ESC: it used to expire as a bare Escape
+// key after 50ms, so the introducer and payload became ordinary text. The
+// reader now holds the lone ESC long enough for the report to join it.
+func TestE2EWorkspaceDoesNotTypeEscapeSplitMouseReportIntoShell(t *testing.T) {
+	bin := golderBinary(t)
+	root := tempRoot(t)
+	env := isolatedEnv(t, root)
+	dir := project(t, root)
+	socket := filepath.Join(root, "s.sock")
+	t.Cleanup(func() { stopQuietly(bin, dir, env, "--session", "mouseesc") })
+	args := append([]string{"workspace", "--shell", "--no-animations"}, workspaceArgs(dir, socket, "mouseesc")...)
+	v := newTerminal(t).start(t, bin, dir, env, args...)
+	v.waitForOutput(t, "\x1b[?2026h", 60*time.Second, "workspace frame")
+	v.typeKeys(t, "echo reader-$((1+1))-ready; IFS= read -r line; printf '%s' \"$line\" > mouse-esc.txt\r")
+	v.waitForOutput(t, "reader-2-ready", 30*time.Second, "shell reader ready")
+	v.typeKeys(t, "\x1b")
+	time.Sleep(150 * time.Millisecond) // after the old 50ms Esc timeout, before the join window closes
+	v.typeKeys(t, "[<0;65;59Mmarker\r")
+	var got []byte
+	waitFor(t, 10*time.Second, "shell input record", func() bool {
+		var err error
+		got, err = os.ReadFile(filepath.Join(dir, "mouse-esc.txt"))
+		return err == nil && len(got) > 0
+	})
+	if string(got) != "marker" {
+		t.Fatalf("outer workspace typed an Esc-split mouse report into the shell: %q", got)
+	}
+}
+
 func TestE2EWorkspaceReportsDoNotLeakIntoAgentComposer(t *testing.T) {
 	bin := golderBinary(t)
 	root := tempRoot(t)
