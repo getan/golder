@@ -69,6 +69,31 @@ func isProtocolTail(b []byte) bool {
 	}
 }
 
+// isReportPrefix reports whether a cancelled frame began as a terminal report
+// rather than an ordinary key or title string. Only the reply shapes whose
+// loss can leave a stale quit arm are recognized: SGR/X10/CSI-u/focus/mode
+// replies, color/clipboard replies, kitty graphics and DCS capability.
+func isReportPrefix(b []byte) bool {
+	if len(b) < 3 || b[0] != 0x1b {
+		return false
+	}
+	switch b[1] {
+	case '[':
+		return isProtocolTail(b[1:])
+	case ']':
+		return bytes.HasPrefix(b[1:], []byte("]10;")) ||
+			bytes.HasPrefix(b[1:], []byte("]11;")) ||
+			bytes.HasPrefix(b[1:], []byte("]12;")) ||
+			bytes.HasPrefix(b[1:], []byte("]52;"))
+	case '_':
+		return isProtocolTail(b[1:])
+	case 'P':
+		return isProtocolTail(b[1:])
+	default:
+		return false
+	}
+}
+
 // frameInput recognizes boundaries, not event meaning. EventDecoder remains the
 // only decoder. Holding a frame here also protects recognized events such as
 // X10 mouse that the stateless decoder otherwise accepts before their payload.

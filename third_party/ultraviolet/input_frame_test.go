@@ -338,6 +338,84 @@ func TestInputVeryLateProtocolTailIsNotTyped(t *testing.T) {
 	}
 }
 
+// A recognized report prefix that never completes is cancelled by the next
+// ESC. The discarded prefix must produce a neutral event so the host can
+// clear a pending quit arm before it sees that second Escape.
+func TestInputCancelledFrameSignalsDroppedReport(t *testing.T) {
+	r, w := io.Pipe()
+	events := make(chan Event, 16)
+	d := NewTerminalReader(r, "xterm-256color")
+	d.EscTimeout = 5 * time.Millisecond
+	d.BareEscTimeout = 20 * time.Millisecond
+	go func() {
+		_, _ = io.WriteString(w, "\x1b")
+		time.Sleep(50 * time.Millisecond) // first Esc is delivered
+		_, _ = io.WriteString(w, "[<0;")
+		time.Sleep(20 * time.Millisecond) // recognized-but-unfinished report
+		_, _ = io.WriteString(w, "\x1b")
+		_ = w.Close()
+	}()
+	if err := d.StreamEvents(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	var sequence []string
+	for e := range events {
+		switch e := e.(type) {
+		case KeyPressEvent:
+			if e.Code == KeyEscape {
+				sequence = append(sequence, "esc")
+			} else {
+				sequence = append(sequence, "key:"+e.Text)
+			}
+		case UnknownEvent:
+			sequence = append(sequence, "dropped")
+		}
+	}
+	want := []string{"esc", "dropped", "esc"}
+	if !reflect.DeepEqual(sequence, want) {
+		t.Fatalf("cancelled report sequence = %v, want %v", sequence, want)
+	}
+}
+
+// A bare CSI prefix cancelled by the next Esc is the acceptance case: the
+// first Esc armed a quit, the malformed "ESC[" must clear it, and the second
+// Esc may only arm again.
+func TestInputCancelledBareCSISignalsDroppedReport(t *testing.T) {
+	r, w := io.Pipe()
+	events := make(chan Event, 16)
+	d := NewTerminalReader(r, "xterm-256color")
+	d.EscTimeout = 5 * time.Millisecond
+	d.BareEscTimeout = 20 * time.Millisecond
+	go func() {
+		_, _ = io.WriteString(w, "\x1b")
+		time.Sleep(50 * time.Millisecond) // first Esc is delivered
+		_, _ = io.WriteString(w, "\x1b[")
+		time.Sleep(20 * time.Millisecond)
+		_, _ = io.WriteString(w, "\x1b")
+		_ = w.Close()
+	}()
+	if err := d.StreamEvents(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	var sequence []string
+	for e := range events {
+		switch e := e.(type) {
+		case KeyPressEvent:
+			if e.Code == KeyEscape {
+				sequence = append(sequence, "esc")
+			}
+		case UnknownEvent:
+			sequence = append(sequence, "dropped")
+		}
+	}
+	want := []string{"esc", "dropped", "esc"}
+	if !reflect.DeepEqual(sequence, want) {
+		t.Fatalf("cancelled bare CSI sequence = %v, want %v", sequence, want)
+	}
+}
+
 // A literal "[" typed after a real Escape is not a report. The recognizer is
 // narrower than the frame introducer for exactly this case.
 func TestInputEscapeThenTypedBracketStaysText(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
@@ -163,9 +164,13 @@ type Model struct {
 	// quitArmedAt marks when the first idle Ctrl+C/Esc armed a quit: a second
 	// press within quitArmWindow quits, otherwise the arm expires and the next
 	// press re-arms. Zero = disarmed. A single idle press must never quit —
-	// too easy to fat-finger away a session. Any other key, mouse event or
-	// paste clears the arm (see disarmQuitOnInput).
+	// too easy to fat-finger away a session. Any other input message clears
+	// the arm; only the same quit key again completes it (see
+	// disarmQuitOnInput).
 	quitArmedAt time.Time
+	// quitArmedKey is the key that armed the quit: "esc" or "ctrl+c". A
+	// different quit key re-arms rather than completing the other key's arm.
+	quitArmedKey string
 
 	// interruptRequested records that this run's interrupt has already been
 	// requested, so repeated Ctrl+C/Esc presses during one run stay idempotent:
@@ -2325,7 +2330,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.transcript.addSystem(notice)
 			return m, nil
 		}
-		return m.interruptOrQuit()
+		return m.interruptOrQuit("ctrl+c")
 	case "super+c":
 		// Cmd+C on macOS is the platform-standard copy: copy the mouse selection
 		// when there is one (clearing it), else the whole input buffer. Unlike
@@ -2347,7 +2352,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "esc":
-		return m.interruptOrQuit()
+		return m.interruptOrQuit("esc")
 	case "ctrl+t":
 		// Toggle the most-recent tool card between its one-line summary and the
 		// full detail, then re-flow so the change shows inline (#389, codex
@@ -4022,11 +4027,12 @@ func (m *Model) stepSeedMore(msg seedMoreMsg) tea.Cmd {
 	return seedMoreTick(m.seedMoreGen)
 }
 
-// disarmQuitOnInput cancels a pending two-stage quit when the person does
-// anything other than press the quit key again. Without this, a split terminal
-// report (an Escape followed by the rest of a mouse/key sequence) could arm a
-// quit, its text tail could arrive, and a later stray Escape would quit as
-// though the person had pressed the key twice on purpose.
+// disarmQuitOnInput cancels a pending two-stage quit on anything that is not
+// the same quit key again. This is deliberately a default-deny list: terminal
+// focus/blur reports, malformed reports and message types added later all
+// clear the arm without needing to be enumerated. Only periodic background
+// ticks are exempt, because they carry no person input and would otherwise
+// make a deliberate double press impossible.
 func (m Model) disarmQuitOnInput(msg tea.Msg) Model {
 	if m.quitArmedAt.IsZero() {
 		return m
@@ -4037,12 +4043,20 @@ func (m Model) disarmQuitOnInput(msg tea.Msg) Model {
 		case "esc", "ctrl+c":
 			return m
 		}
-	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg, tea.MouseWheelMsg, tea.PasteMsg:
-	default:
+	case tea.KeyReleaseMsg:
+		// A release is not a new action; a terminal that reports event types
+		// sends the release of the very Escape that armed the quit.
 		return m
+	case spinnerTickMsg, streamRenderTickMsg, selScrollTickMsg,
+		userShellTickMsg, gitRefreshTickMsg, updateTickMsg, logoFrameMsg:
+		return m
+	}
+	if _, ok := msg.(uv.UnknownEvent); ok {
+		diagtrace.Event("tui", "dropped malformed report")
 	}
 	diagtrace.Event("tui", "exit arm cleared by input")
 	m.quitArmedAt = time.Time{}
+	m.quitArmedKey = ""
 	return m
 }
 
@@ -4084,7 +4098,7 @@ func (m Model) clearDraft() Model {
 // notice nor pretend something new happened. That mattered in practice — a
 // user who pressed again because the run had not visibly stopped got a second
 // "(interrupting…)" line and read the pair as "the key did nothing".
-func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
+func (m Model) interruptOrQuit(source string) (tea.Model, tea.Cmd) {
 	if m.running {
 		diagtrace.Event("interrupt", "cancel requested session_op=%t run_cancel=%t already_requested=%t", m.sessionOpCancel != nil, m.interruptFn != nil, m.interruptRequested)
 		// A session op (/compact, /dream) has no run ctx of its own; cancel it
@@ -4122,14 +4136,15 @@ func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, nil
 	}
-	if !m.quitArmedAt.IsZero() && time.Since(m.quitArmedAt) < quitArmWindow {
+	if !m.quitArmedAt.IsZero() && m.quitArmedKey == source && time.Since(m.quitArmedAt) < quitArmWindow {
 		m.traceExit("double_interrupt", true)
 		m.shutdownRemote()
 		m.quitting = true
 		return m, tea.Quit
 	}
 	m.quitArmedAt = time.Now()
-	diagtrace.Event("tui", "exit armed source=interrupt")
+	m.quitArmedKey = source
+	diagtrace.Event("tui", "exit armed source=interrupt key=%s", source)
 	m.transcript.addSystem(ui.QuitArmedNotice)
 	return m, nil
 }

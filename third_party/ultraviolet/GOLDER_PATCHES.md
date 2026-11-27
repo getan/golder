@@ -25,6 +25,9 @@ Local changes:
   join the introducer instead of becoming text; a tail that still arrives
   later is decoded inside `EscTailWindow`, never typed. Any input that does
   not identify a report releases the pending Escape immediately, in order.
+  A recognized report cut short by a new ESC emits a neutral
+  `UnknownEvent` instead of disappearing; the host uses it to clear a pending
+  quit arm before handling that Escape.
 - `decoder.go`: accept the shorter eight-bit CSI X10 mouse prefix rather than
   indexing it as a six-byte seven-bit report (a fuzz-reproduced panic).
 - Regression tests exercise all split positions, delayed reads, malformed and

@@ -37,6 +37,9 @@ Typing or pasting the literal text `65;59M` still works.
   at 16MiB. Oversized frames/pastes are discarded whole rather than truncated
   into input. The reader can resynchronize at a new escape sequence or an
   interrupt key. There is no second reader competing for stdin.
+- A recognized report cut short by a new ESC emits a neutral cancelled-report
+  event, never text. The TUI uses it to clear a pending quit arm before that
+  Escape is handled.
 - Bytes already missing their prefix cannot safely be distinguished from
   intentionally typed text beyond the tail window. No regex removes
   report-looking numbers or color strings from a draft. A stalled, unterminated

@@ -55,7 +55,7 @@ func TestSessionOpCtrlCCancels(t *testing.T) {
 		t.Fatal("the session op never started")
 	}
 
-	got, _ := m.interruptOrQuit()
+	got, _ := m.interruptOrQuit("ctrl+c")
 	m = got.(Model)
 	select {
 	case <-cancelled:

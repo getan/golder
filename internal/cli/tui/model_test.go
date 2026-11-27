@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
@@ -95,6 +96,80 @@ func TestModelQuitArmClearedByOtherInput(t *testing.T) {
 	}
 	if again.(Model).quitArmedAt.IsZero() {
 		t.Fatal("the later Esc should arm a fresh quit")
+	}
+}
+
+// TestModelQuitArmClearedByReports covers messages that are not key presses:
+// focus/blur reports and a malformed report that the decoder had to discard.
+// None of them may leave the quit armed for a later Escape to complete.
+func TestModelQuitArmClearedByReports(t *testing.T) {
+	esc := tea.KeyPressMsg{Code: tea.KeyEscape}
+	for _, tc := range []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{"focus", tea.FocusMsg{}},
+		{"blur", tea.BlurMsg{}},
+		{"malformed report", uv.UnknownEvent("input frame cancelled")},
+		{"mouse motion", tea.MouseMotionMsg{X: 1, Y: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewModel(Options{})
+			armed, _ := m.Update(esc)
+			if armed.(Model).quitArmedAt.IsZero() {
+				t.Fatal("first Esc should arm the quit")
+			}
+			cleared, _ := armed.Update(tc.msg)
+			if !cleared.(Model).quitArmedAt.IsZero() {
+				t.Fatalf("%s should clear the quit arm", tc.name)
+			}
+			again, cmd := cleared.Update(esc)
+			if cmd != nil || again.(Model).quitting {
+				t.Fatalf("%s then Esc must only re-arm, not quit", tc.name)
+			}
+		})
+	}
+}
+
+// TestModelQuitArmSurvivesBackgroundTick: ticks carry no person input, so
+// they are the one class that must not break a deliberate double press.
+func TestModelQuitArmSurvivesBackgroundTick(t *testing.T) {
+	esc := tea.KeyPressMsg{Code: tea.KeyEscape}
+	m := NewModel(Options{})
+	armed, _ := m.Update(esc)
+	ticked, _ := armed.Update(spinnerTickMsg(time.Now()))
+	if ticked.(Model).quitArmedAt.IsZero() {
+		t.Fatal("a background tick must not clear the quit arm")
+	}
+	_, cmd := ticked.Update(esc)
+	if cmd == nil {
+		t.Fatal("the second Esc after a tick should quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("the second Esc produced %T, want tea.QuitMsg", cmd())
+	}
+}
+
+// TestModelQuitArmNeedsTheSameKey: an Esc followed by Ctrl+C is not a double
+// press. The second key replaces the arm; only another Ctrl+C completes it.
+func TestModelQuitArmNeedsTheSameKey(t *testing.T) {
+	esc := tea.KeyPressMsg{Code: tea.KeyEscape}
+	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+	m := NewModel(Options{})
+	armed, _ := m.Update(esc)
+	other, cmd := armed.Update(ctrlC)
+	if cmd != nil || other.(Model).quitting {
+		t.Fatal("Esc then Ctrl+C must not quit")
+	}
+	if other.(Model).quitArmedKey != "ctrl+c" {
+		t.Fatalf("Ctrl+C should replace the Esc arm, got %q", other.(Model).quitArmedKey)
+	}
+	_, cmd = other.Update(ctrlC)
+	if cmd == nil {
+		t.Fatal("the second Ctrl+C should quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("the second Ctrl+C produced %T, want tea.QuitMsg", cmd())
 	}
 }
 

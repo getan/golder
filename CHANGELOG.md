@@ -18,6 +18,12 @@ interactive REPL/TUI.
   input is not an introducer, and still decodes a later tail as its frame
   instead of typing `0;14;40m` / `2;5u`. The TUI also disarms a pending
   two-stage quit as soon as any other key, mouse event or paste arrives.
+- **A cancelled report can no longer leave a stale quit armed.** A recognized
+  mouse/key/color report cut short by a new Esc now emits a neutral
+  cancelled-report message instead of being dropped silently. The TUI clears
+  its quit arm for every message except the same quit key again: focus/blur
+  reports and malformed reports are covered by construction, and Esc no longer
+  completes a Ctrl+C arm (or vice versa).
 - Add `@` local-file completion to the composer. Type `@` to open a file
   picker over the session's working directory, fuzzy-match paths, and insert
   the selected file or directory with Tab/Enter. The index prefers

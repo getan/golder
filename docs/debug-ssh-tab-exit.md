@@ -105,7 +105,8 @@ golder_debug_run
 | `tui completion begin` → `apply` → `end` | 进入补全、即将填入候选、补全返回。包含窗口尺寸、输入字节数、候选数、选中索引、运行/退出状态，不含候选名或输入。 |
 | `completion apply` 后没有 `end`，并有 `panic phase=tui.update` | 查看紧随的 `panic frame=… function=… line=…`；定位 SetValue / refresh 等实际失败位置，不要先修改 SSH。 |
 | `tui exit intent source=ctrl_d accepted=true` | 命中了明确的 Ctrl+D 退出分支，不等于内核发了 EOF。`accepted=false` 表示运行中拒绝退出。 |
-| `tui exit arm cleared by input` | 已 armed 的二次退出被其他按键、鼠标或粘贴取消；后续迟到 Esc 只会重新 arm，不会退出。 |
+| `tui exit arm cleared by input` | 已 armed 的二次退出被其他输入（按键、鼠标、焦点、畸形报文等）取消；后续迟到 Esc 只会重新 arm，不会退出。 |
+| `tui dropped malformed report` | 解码器丢弃了一个被新 ESC 截断的报告前缀；随后会先解除退出武装，再处理这颗 Esc。 |
 | `source=double_interrupt` / `source=slash_exit` | 命中了双重中断或 `/exit` 分支。不是 Tab 自身的退出逻辑。 |
 | `input read … error_class=eof` | 底层输入结束，和已解码的 Ctrl+D 是两件事；检查 fd/TTY/SSH 生命周期。 |
 | `output end … error_class=broken_pipe` / `io_error` / `bad_fd` / `closed_file` | 输出或文件描述符异常；结合前后时间线判断，不直接归罪于某个组件。 |

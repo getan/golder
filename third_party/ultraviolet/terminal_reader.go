@@ -391,6 +391,14 @@ func (d *eventScanner) scanEvents(buf []byte, expired bool) (total int, events [
 		}
 		f := frameInput(buf)
 		if f.cancel {
+			if f.end > 0 && f.end < len(buf) && buf[f.end] == ansi.ESC &&
+				buf[f.end-1] != 0x18 && buf[f.end-1] != 0x1a &&
+				(f.kind == inputCSI || f.kind == inputSS3 || isReportPrefix(buf[:f.end])) {
+				// A report or key frame was cut short by a new ESC. Tell the
+				// host that input happened so a pending quit arm cannot
+				// survive to be completed by that next Escape.
+				events = append(events, UnknownEvent("input frame cancelled"))
+			}
 			buf, total = buf[f.end:], total+f.end
 			continue
 		}
