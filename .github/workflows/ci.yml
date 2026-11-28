@@ -68,8 +68,8 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Windows browser transport tests
-        run: go test ./internal/browserctl ./internal/browserpool ./internal/agenttool -run 'TestCheckSocketWindowsPipe|TestCanonicalPipeEndpoint|TestValidBrowserMetadataEndpointRejectsUnknownPipe|TestBrowserMetadataRoundTrip' -count=1
+      - name: Windows browser transport and wiring tests
+        run: go test ./internal/browserctl ./internal/browserpool ./internal/agenttool ./internal/cli/run -run 'TestCheckSocketWindowsPipe|TestCanonicalPipeEndpoint|TestValidBrowserMetadataEndpointRejectsUnknownPipe|TestBrowserMetadataRoundTrip|TestNativeLauncherRegistersBrowserTool|TestSetupEnvKeepsBrowserTool' -count=1
 
       - name: Build GUI
         run: go build ./gui/cmd/golder-gui
