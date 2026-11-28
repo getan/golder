@@ -9,10 +9,11 @@ import (
 	"io"
 	"net"
 	"net/url"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/getan/golder/internal/proc"
 )
 
 // SecurePort is the loopback-only backend for the operator-configured Serve
@@ -97,7 +98,7 @@ func (b *limitedOutput) Write(p []byte) (int, error) {
 }
 
 func tailscaleJSON(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "tailscale", args...)
+	cmd := proc.CommandContext(ctx, "tailscale", args...)
 	var out limitedOutput
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {

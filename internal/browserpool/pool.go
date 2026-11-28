@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/privatepath"
+	"github.com/getan/golder/internal/proc"
 )
 
 const HelperFlag = "--golder-browser-hub"
@@ -86,7 +86,7 @@ func start(ctx context.Context, opts browserhost.SharedOptions) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, HelperFlag)
+	cmd := proc.Command(exe, HelperFlag)
 	cmd.Stdin = bytes.NewReader(data)
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	home, err := os.MkdirTemp("", "golder-browser-home-")

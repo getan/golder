@@ -11,7 +11,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/proc"
 	"github.com/getan/golder/internal/seatbelt"
 )
 
@@ -60,7 +60,7 @@ func Resolve(ctx context.Context, cwd, name string) (Plan, error) {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(probeCtx, path, "env", "-json", "GOROOT", "GOMODCACHE", "GOCACHE", "GOENV")
+	cmd := proc.CommandContext(probeCtx, path, "env", "-json", "GOROOT", "GOMODCACHE", "GOCACHE", "GOENV")
 	cmd.Dir = os.TempDir()
 	cmd.Env = probeEnvironment(os.Environ())
 	// A Go test host may export its own downloaded GOROOT. The selected SDK

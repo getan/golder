@@ -194,6 +194,10 @@ interactive REPL/TUI.
   fails with “No artifacts found”.
 
 ### Windows desktop compatibility
+- Give every GUI-triggered console child a hidden console through a shared
+  process launcher, so bash and its helper commands no longer flash a console
+  window. Windows bash sessions also use a kill-on-close Job Object so a
+  timeout or cancel reaps git/rg descendants instead of leaving orphans.
 - Skip the `System32\bash.exe` WSL launcher stub when selecting the bash tool's
   interpreter, probe Git Bash before use, and fall back through PowerShell 7,
   Windows PowerShell 5.1 and cmd. Failed commands now report the shell, argv,

@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,6 +23,7 @@ import (
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/patch"
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/proc"
 	"github.com/getan/golder/internal/seatbelt"
 )
 
@@ -175,7 +175,7 @@ func (t *Tool) Execute(ctx context.Context, id string, args json.RawMessage, _ a
 		return failed(err.Error())
 	}
 	defer release()
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := proc.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = t.Root
 	cmd.Env = workerEnv()
 	cmd.WaitDelay = 2 * time.Second

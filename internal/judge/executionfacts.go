@@ -35,6 +35,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/proc"
 	"github.com/getan/golder/internal/shellfacts"
 	"github.com/getan/golder/internal/toolchain"
 )
@@ -778,7 +779,7 @@ func runGitFactQuery(ctx context.Context, dir string, args ...string) ([]string,
 	}
 	qctx, cancel := context.WithTimeout(ctx, gitFactTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(qctx, resolved, args...)
+	cmd := proc.CommandContext(qctx, resolved, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_PAGER=cat", "LC_ALL=C")
 	out := &cappedFactOutput{max: gitFactOutputMax}

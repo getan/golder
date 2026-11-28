@@ -16,15 +16,15 @@ import (
 	"image"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"unicode/utf8"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/getan/golder/internal/proc"
 )
 
 //go:embed uia_windows.ps1 wgc_windows.cs
@@ -327,8 +327,7 @@ func (b *windowsBackend) run(ctx context.Context, request windowsUIARequest) (wi
 	if err != nil {
 		return windowsUIAResult{}, err
 	}
-	cmd := exec.CommandContext(ctx, b.powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", windowsUIABootstrap)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
+	cmd := proc.CommandContext(ctx, b.powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", windowsUIABootstrap)
 	cmd.Stdin = bytes.NewReader(data)
 	var output boundedWindowsOutput
 	var diagnostic boundedWindowsDiagnostic

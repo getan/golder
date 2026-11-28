@@ -37,6 +37,12 @@ func configureTTYProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 }
 
+// newProcessTree has no extra handle on Unix: the process group created by
+// configurePipeProcess/configureTTYProcess is the tree.
+func newProcessTree(*exec.Cmd) uintptr { return 0 }
+
+func closeProcessTree(uintptr) {}
+
 // terminateProcessGroup sends SIGTERM to the process group. It reports whether
 // the signal was delivered.
 func terminateProcessGroup(pid int) bool {

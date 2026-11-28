@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/extension"
+	"github.com/getan/golder/internal/proc"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/redact"
 	"github.com/getan/golder/internal/seatbelt"
@@ -308,7 +309,7 @@ func prepareCommand(ctx context.Context, c SourceConfig, cwd string, argv []stri
 		cleanup()
 		return nil, nil, e
 	}
-	cmd := exec.CommandContext(ctx, wrapped[0], wrapped[1:]...)
+	cmd := proc.CommandContext(ctx, wrapped[0], wrapped[1:]...)
 	cmd.Env = env
 	cmd.Dir = dir
 	cmd.Stderr = logs

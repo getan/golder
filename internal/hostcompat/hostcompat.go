@@ -42,11 +42,11 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/getan/golder/internal/proc"
 	"github.com/getan/golder/internal/tuiosctl"
 )
 
@@ -593,7 +593,7 @@ func execArgv(ctx context.Context, argv []string) error {
 	if len(argv) == 0 {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := proc.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil

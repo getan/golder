@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/proc"
 )
 
 // GitRequest is an explicit local operator action, never an Agent tool. Scope
@@ -105,7 +105,7 @@ func (c *Controller) GitOperation(ctx context.Context, request GitRequest) (stri
 func runGitOperator(ctx context.Context, root, input string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := proc.CommandContext(ctx, "git", args...)
 	cmd.Dir = root
 	// Interactive credential acquisition belongs in the user's terminal. Keep
 	// normal configured credential helpers/hooks, but never request a GUI secret.

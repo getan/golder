@@ -28,6 +28,7 @@ import (
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/proc"
 )
 
 // searchMaxResults caps the number of matches/entries a search returns unless
@@ -269,7 +270,7 @@ func runRG(ctx context.Context, dir string, args []string) (rgResult, string) {
 		"--no-config", "--no-require-git", "--no-ignore-parent",
 		"--no-ignore-global", "--color=never",
 	}
-	cmd := exec.CommandContext(ctx, bin, append(base, args...)...)
+	cmd := proc.CommandContext(ctx, bin, append(base, args...)...)
 	cmd.Dir = dir
 	// If ripgrep ignores the cancel and keeps writing, WaitDelay tears the
 	// process down instead of hanging the tool call forever.

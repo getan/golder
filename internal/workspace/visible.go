@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/getan/golder/internal/cli/workspacecmd"
 	"github.com/getan/golder/internal/diagtrace"
+	"github.com/getan/golder/internal/proc"
 	"github.com/getan/golder/internal/terminalstate"
 )
 
@@ -212,7 +212,7 @@ func (b *Backend) spawnOwner(ctx context.Context, opts workspacecmd.Options) (wo
 	defer logFile.Close()
 	// Not CommandContext: after readiness, cancelling a UI must leave the
 	// daemon alone. Only a failed startup may terminate this exact child.
-	cmd := exec.Command(executable, args...)
+	cmd := proc.Command(executable, args...)
 	cmd.Dir = opts.Cwd
 	cmd.Env = withHome(os.Environ(), opts.Home)
 	cmd.Stderr = logFile

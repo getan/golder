@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/getan/golder/internal/proc"
 )
 
 // shellSpec is one concrete interpreter and the flags that precede the
@@ -276,7 +277,6 @@ func probeShell(s shellSpec) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), shellProbeTimeout)
 	defer cancel()
 	args := append(append([]string{}, s.args...), "exit 0")
-	cmd := exec.CommandContext(ctx, s.path, args...)
-	configureShellProbe(cmd)
+	cmd := proc.CommandContext(ctx, s.path, args...)
 	return cmd.Run() == nil
 }

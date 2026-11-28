@@ -15,6 +15,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/proc"
 )
 
 // runTool runs one allowlisted command in argv form. It is deliberately not
@@ -119,7 +120,7 @@ func (t *runTool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ 
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, args.Argv[1:]...)
+	cmd := proc.CommandContext(ctx, exe, args.Argv[1:]...)
 	cmd.Dir = t.root
 	cmd.Env = []string{
 		"PATH=" + t.binDir + ":/system/xbin",

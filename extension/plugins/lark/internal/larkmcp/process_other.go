@@ -2,6 +2,12 @@
 
 package larkmcp
 
-import "os/exec"
+import (
+	"os/exec"
 
-func configureChild(*exec.Cmd) {}
+	"github.com/getan/golder/internal/proc"
+)
+
+func configureChild(cmd *exec.Cmd) {
+	proc.Configure(cmd)
+}

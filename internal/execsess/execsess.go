@@ -308,6 +308,7 @@ type Session struct {
 	mu       sync.Mutex
 	cmd      *exec.Cmd
 	pid      int
+	tree     uintptr // Windows job object; always 0 on Unix
 	buf      *headTailBuffer
 	cursor   int64
 	status   Status
@@ -405,6 +406,7 @@ func (s *Session) start() error {
 	s.cmd = cmd
 	s.pid = cmd.Process.Pid
 	s.mu.Unlock()
+	s.attachProcessTree(cmd)
 	if s.tty {
 		go s.pump()
 	}
@@ -415,9 +417,33 @@ func (s *Session) start() error {
 	return nil
 }
 
+// attachProcessTree records the platform tree handle for a started child.
+// Windows binds the child to a job object; Unix has no second handle here and
+// keeps using the process group configured before Start.
+func (s *Session) attachProcessTree(cmd *exec.Cmd) {
+	tree := newProcessTree(cmd)
+	if tree == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.tree = tree
+	s.mu.Unlock()
+}
+
+// closeTree closes the platform tree handle exactly once. On Windows closing
+// the job kills every process still attached to it; on Unix it is a no-op.
+func (s *Session) closeTree() {
+	s.mu.Lock()
+	tree := s.tree
+	s.tree = 0
+	s.mu.Unlock()
+	closeProcessTree(tree)
+}
+
 // reap waits for the process and records its terminal state.
 func (s *Session) reap(cmd *exec.Cmd) {
 	err := cmd.Wait()
+	s.closeTree()
 	exitCode := 0
 	errMsg := ""
 	if err != nil {
@@ -739,6 +765,7 @@ func (s *Session) Kill() {
 	if pid > 0 {
 		killProcessGroup(pid)
 	}
+	s.closeTree()
 	if proc != nil {
 		_ = proc.Kill()
 	}

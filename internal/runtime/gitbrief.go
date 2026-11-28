@@ -3,9 +3,10 @@ package runtime
 import (
 	"bytes"
 	"context"
-	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/getan/golder/internal/proc"
 )
 
 const (
@@ -28,7 +29,7 @@ func gitStatusBriefWithTimeout(ctx context.Context, dir string, timeout time.Dur
 	}
 	probe, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(probe, "git", "--no-optional-locks", "status", "--porcelain", "-b")
+	cmd := proc.CommandContext(probe, "git", "--no-optional-locks", "status", "--porcelain", "-b")
 	cmd.Dir = dir
 	// Git can start helpers holding its stdout pipe open. Bound the pipe wait
 	// too; killing only git must not leave task cancellation waiting on a helper.

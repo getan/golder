@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/getan/golder/internal/proc"
 )
 
 const (
@@ -208,7 +210,7 @@ func parseNumstat(numstat string) map[string][2]int {
 func runGitNoIndex(ctx context.Context, repoRoot string, limit int, path string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "diff", "--no-index", "--no-color", "--unified=3", "--", os.DevNull, path)
+	cmd := proc.CommandContext(ctx, "git", "diff", "--no-index", "--no-color", "--unified=3", "--", os.DevNull, path)
 	cmd.Dir = repoRoot
 	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "GIT_TERMINAL_PROMPT=0")
 	stdout := boundedBuffer{limit: limit}
@@ -335,7 +337,7 @@ func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 func runGitBounded(ctx context.Context, dir string, limit int, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := proc.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	// Local status/diff commands need neither a credential prompt nor a pager.
 	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "GIT_TERMINAL_PROMPT=0", "GIT_LITERAL_PATHSPECS=1")

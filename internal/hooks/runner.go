@@ -16,6 +16,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/getan/golder/internal/proc"
 )
 
 // MaxOutputBytes caps the bytes captured from a hook's stdout and stderr each
@@ -57,7 +59,7 @@ func (r *Runner) Run(ctx context.Context, h HookConfig, input HookInput) (HookOu
 	if shell == "" {
 		shell = "sh"
 	}
-	cmd := exec.CommandContext(runCtx, shell, "-c", h.Command)
+	cmd := proc.CommandContext(runCtx, shell, "-c", h.Command)
 	cmd.Dir = r.ProjectDir
 	cmd.Env = r.env(input)
 	cmd.Stdin = bytes.NewReader(payload)

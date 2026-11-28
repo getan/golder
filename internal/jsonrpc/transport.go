@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/getan/golder/internal/proc"
 )
 
 // closeGrace bounds how long Close waits for a child to exit on its own after
@@ -79,7 +81,7 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	cmd := cfg.Process
 	if cmd == nil {
-		cmd = exec.Command(cfg.Command, cfg.Args...)
+		cmd = proc.Command(cfg.Command, cfg.Args...)
 		cmd.Env = cfg.Env
 		cmd.Dir = cfg.Dir
 		cmd.Stderr = cfg.Stderr
