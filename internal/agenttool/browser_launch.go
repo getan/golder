@@ -607,7 +607,7 @@ func waitForBrowserSocket(ctx context.Context, path string, d time.Duration) err
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if info, err := os.Stat(path); err == nil && info.Mode()&os.ModeSocket != 0 {
+		if browserEndpointReady(ctx, path) {
 			return nil
 		}
 		if !time.Now().Before(deadline) {

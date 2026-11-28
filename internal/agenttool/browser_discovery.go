@@ -37,6 +37,9 @@ func canonicalBrowserSocket(path string) string {
 	if path == "" {
 		return ""
 	}
+	if pipe, ok := canonicalPipeEndpoint(path); ok {
+		return pipe
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return path
@@ -45,6 +48,17 @@ func canonicalBrowserSocket(path string) string {
 		return real
 	}
 	return abs
+}
+
+// validBrowserMetadataEndpoint accepts a filesystem socket only when it is in
+// one of this workspace's browser directories. A named pipe is accepted only
+// when the record's own conversation/instance identity derives that exact pipe,
+// so repository metadata cannot point discovery at another local pipe.
+func validBrowserMetadataEndpoint(root string, meta browserMetadata) bool {
+	if _, ok := canonicalPipeEndpoint(meta.Socket); ok {
+		return checkSessionBrowserRecord(root, meta) == nil
+	}
+	return validBrowserSocketLocation(root, meta.Socket)
 }
 
 // Discover only two shallow workspace directories, not profile directories or
@@ -106,7 +120,7 @@ func browserCandidatePaths(cwd, selected string) ([]string, bool) {
 				add(filepath.Join(real, entry.Name()))
 			case strings.HasSuffix(entry.Name(), ".browser.json"):
 				meta, err := readBrowserMetadata(filepath.Join(real, entry.Name()))
-				if err != nil || !validBrowserSocketLocation(root, meta.Socket) {
+				if err != nil || !validBrowserMetadataEndpoint(root, meta) {
 					continue
 				}
 				if len(paths) == maxBrowserCandidates {

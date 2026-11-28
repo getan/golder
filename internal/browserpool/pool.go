@@ -47,20 +47,13 @@ func Options(profile, login, proxy string) (browserhost.SharedOptions, error) {
 	sum := sha256.Sum256([]byte(profile))
 	key := hex.EncodeToString(sum[:8])
 	state := golderhome.File(filepath.Join("browser-hubs", key))
-	runtimeRoot := privatepath.RuntimeRoot(os.Getenv)
-	if len(filepath.Join(runtimeRoot, "bh-"+key, "000000000000000000000000.sock")) > 103 {
-		runtimeRoot = filepath.Join("/tmp", privatepath.RuntimeName())
-	}
-	parent, err := filepath.EvalSymlinks(filepath.Dir(runtimeRoot))
-	if err == nil {
-		runtimeRoot = filepath.Join(parent, filepath.Base(runtimeRoot))
-	}
+	runtimeDir := browserRuntimeDir(key, os.Getenv)
 	opts := browserhost.DefaultOptions()
 	opts.URL, opts.Socket = "", ""
 	opts.ProfileDir, opts.LoginProfile, opts.ProxyServer = profile, login, proxy
 	opts.Chrome = os.Getenv("KITTY_BROWSE_CHROME")
 	opts.RequireSandbox = true
-	return browserhost.SharedOptions{Browser: opts, StateDir: state, RuntimeDir: filepath.Join(runtimeRoot, "bh-"+key)}, nil
+	return browserhost.SharedOptions{Browser: opts, StateDir: state, RuntimeDir: runtimeDir}, nil
 }
 
 // Open starts the broker once when needed; concurrent helpers arbitrate using
@@ -93,7 +86,7 @@ func start(ctx context.Context, opts browserhost.SharedOptions) error {
 	if err != nil {
 		return err
 	}
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "CFFIXED_USER_HOME=" + home, "TMPDIR=" + os.TempDir(), "XDG_CONFIG_HOME=" + filepath.Join(home, "config"), "XDG_CACHE_HOME=" + filepath.Join(home, "cache")}
+	cmd.Env = browserHelperEnv(home)
 	detach(cmd)
 	if err := cmd.Start(); err != nil {
 		os.RemoveAll(home)
@@ -101,7 +94,7 @@ func start(ctx context.Context, opts browserhost.SharedOptions) error {
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait(); _ = os.RemoveAll(home) }()
-	deadline := time.NewTimer(10 * time.Second)
+	deadline := time.NewTimer(browserHubReadyTimeout())
 	defer deadline.Stop()
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
