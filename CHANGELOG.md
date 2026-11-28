@@ -17,6 +17,11 @@ interactive REPL/TUI.
   macOS and Linux keep their existing socket, permission and `flock` behavior.
   Chrome and Chromium-based Edge are discovered automatically. See
   `docs/windows-browser-use.md`.
+- **The Git tab no longer stays on "Loading selected file diff…" for nested
+  files on Windows.** Git reports repository paths with `/`; `filepath.Clean`
+  turned them into `\`, so the loaded diff failed the selection guard and left
+  the loading state set. Repository paths are normalized to slash form, and a
+  mismatch now clears loading and reports an error instead of hanging.
 
 ### TUI
 - **A split Esc no longer turns a mouse/key report into typed text or an

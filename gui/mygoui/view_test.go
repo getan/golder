@@ -317,6 +317,20 @@ func TestLazyDiffDiscardsStaleResult(t *testing.T) {
 	}
 }
 
+func TestLazyDiffPathMismatchClearsLoading(t *testing.T) {
+	a := testApp()
+	a.changes = appsession.Changes{Files: []appsession.FileStatus{{Path: "dir/file.go", Status: "M"}}}
+	a.diffRequest = 1
+	a.diffLoading = true
+	a.applyFileDiff(1, 0, appsession.FileDiff{Path: `dir\file.go`}, nil)
+	if a.diffLoading {
+		t.Fatal("loading stayed true after a path mismatch")
+	}
+	if a.changesErr == "" {
+		t.Fatal("path mismatch was not reported")
+	}
+}
+
 func TestChangesDiffUsesWrappedUnifiedLayoutForEachFileKind(t *testing.T) {
 	longLine := strings.Repeat("long text 中文 ", 30)
 	for _, tc := range []struct {

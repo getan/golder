@@ -81,7 +81,7 @@ func (c *Controller) GitOperation(ctx context.Context, request GitRequest) (stri
 	case "fetch":
 		args = []string{"fetch"}
 	case "stage", "unstage":
-		path := filepath.Clean(request.Path)
+		path := cleanRepositoryPath(request.Path)
 		if request.Path == "" {
 			path = "."
 		}

@@ -352,6 +352,35 @@ func TestChangesOnGitRepository(t *testing.T) {
 	}
 }
 
+func TestFileDiffKeepsGitSlashPaths(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	c, _, dir := newTestController(t)
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	nested := filepath.Join(dir, "dir", "nested.txt")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nested, []byte("nested\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := c.FileDiff(context.Background(), ChangesUnstaged, filepath.Join("dir", "nested.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff.Path != "dir/nested.txt" {
+		t.Fatalf("path = %q, want Git slash form dir/nested.txt", diff.Path)
+	}
+	if !strings.Contains(diff.Patch, "nested.txt") {
+		t.Fatalf("patch = %q", diff.Patch)
+	}
+}
+
 func TestChangesSeparatesAndStagesIndexViews(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")

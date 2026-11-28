@@ -786,14 +786,20 @@ func (a *App) selectDiffRow(row int) {
 }
 
 func (a *App) applyFileDiff(request uint64, row int, result appsession.FileDiff, loadErr error) {
-	if request != a.diffRequest || row < 0 || row >= len(a.changes.Files) ||
-		(loadErr == nil && a.changes.Files[row].Path != result.Path) {
+	if request != a.diffRequest {
 		return
 	}
 	a.diffCancel = nil
 	a.diffLoading = false
+	if row < 0 || row >= len(a.changes.Files) {
+		return
+	}
 	if loadErr != nil {
 		a.changesErr = loadErr.Error()
+		return
+	}
+	if a.changes.Files[row].Path != result.Path {
+		a.changesErr = "diff result did not match the selected file"
 		return
 	}
 	a.fileDiff = result

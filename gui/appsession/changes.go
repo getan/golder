@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -107,7 +108,7 @@ func (c *Controller) FileDiff(ctx context.Context, view ChangeView, path string)
 	if view != ChangesStaged {
 		view = ChangesUnstaged
 	}
-	path = filepath.Clean(strings.TrimSpace(path))
+	path = cleanRepositoryPath(path)
 	if !validRepositoryPath(path) {
 		return FileDiff{}, errors.New("invalid repository path")
 	}
@@ -239,7 +240,7 @@ func (c *Controller) SetAllStaged(ctx context.Context, staged bool) error {
 
 // SetFileStaged stages or unstages one status path from the active repository.
 func (c *Controller) SetFileStaged(ctx context.Context, path string, staged bool) error {
-	path = filepath.Clean(strings.TrimSpace(path))
+	path = cleanRepositoryPath(path)
 	if !validRepositoryPath(path) {
 		return errors.New("invalid repository path")
 	}
@@ -270,7 +271,7 @@ func (c *Controller) statusPaths(ctx context.Context, repoRoot, path string) []s
 		code, current := record[:2], record[3:]
 		renamed := code[0] == 'R' || code[0] == 'C' || code[1] == 'R' || code[1] == 'C'
 		if renamed && i+1 < len(records) {
-			original := filepath.Clean(records[i+1])
+			original := cleanRepositoryPath(records[i+1])
 			i++
 			if current == path && validRepositoryPath(original) {
 				return []string{path, original}
@@ -280,9 +281,19 @@ func (c *Controller) statusPaths(ctx context.Context, repoRoot, path string) []s
 	return []string{path}
 }
 
+// cleanRepositoryPath normalizes a Git path to slash form. Git reports paths
+// with '/', including on Windows; filepath.Clean would turn them into '\' and
+// break the lazy-diff selection guard that compares the result with the status
+// list.
+func cleanRepositoryPath(raw string) string {
+	return pathpkg.Clean(filepath.ToSlash(strings.TrimSpace(raw)))
+}
+
 func validRepositoryPath(path string) bool {
-	return path != "." && !filepath.IsAbs(path) && path != ".." &&
-		!strings.HasPrefix(path, ".."+string(filepath.Separator)) && strings.IndexByte(path, 0) < 0
+	path = filepath.ToSlash(path)
+	return path != "" && path != "." && path != ".." &&
+		!filepath.IsAbs(path) && !pathpkg.IsAbs(path) &&
+		!strings.HasPrefix(path, "../") && strings.IndexByte(path, 0) < 0
 }
 
 func (c *Controller) repoRoot(ctx context.Context) (string, error) {
