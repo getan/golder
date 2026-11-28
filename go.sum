@@ -122,6 +122,8 @@ github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx5
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/getan/kitty-browse v0.2.17 h1:zdYaIKRifqHhD7dZX/Q2H05DQ+18/Wnf6PDQdKukhWE=
 github.com/getan/kitty-browse v0.2.17/go.mod h1:w8rQ2QjZ24EjoVhf8okrLkB//DaoB+sGKelKP5JntbI=
+github.com/getan/kitty-browse v0.2.18-0.20261128145844-5db14e6a6473 h1:bx6UHRWicX1T0EIOMq9d1rIRdsjSNdar+plLVe4AOe0=
+github.com/getan/kitty-browse v0.2.18-0.20261128145844-5db14e6a6473/go.mod h1:v8IX0BFbOdFZzyUq10PZWHJ3pzxfUz+gl24hwApuwsc=
 github.com/getan/mygo v0.10.1 h1:18V5DxYgMDl8mDUJ5VI0oeLY+/ztSEcfWHcqP/HpZVI=
 github.com/getan/mygo v0.10.1/go.mod h1:dVav53PwF2xEotjf4oA5lTY2Jp2exgzyjLhbSXhbMwE=
 github.com/getan/mygo v0.10.2 h1:hbqGHEseGB92WIMKVmBefIYpn6rSCu5CAPC0AZ+mmbA=

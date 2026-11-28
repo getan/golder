@@ -1,6 +1,6 @@
 # Windows GUI 浏览器支持技术方案
 
-> 状态：已实现（分支 `windows-browser-transport`，待依赖版本与发布验收）
+> 状态：已实现（分支 `windows-browser-transport`，依赖伪版本已锁定）
 > 最后更新：2026-11-28
 > 范围：Windows GUI 的 `browser` 工具与 shared browser hub
 > 原则：macOS/Linux 行为不变；不引入 Windows 专用浏览器生命周期；不使用 TCP 控制通道
@@ -285,3 +285,18 @@ Unix 回归要求：
 - kitty-browse `internal/control/control_unix.go`、`control_unsupported.go`；
 - kitty-browse `browserhost/shared.go`、`shared_unix.go`、`shared_other.go`；
 - `docs/releases/v1.5.53.md`：v1.5.53 的 native browser drawer 说明。
+
+## 10. 实现状态（2026-11-28）
+
+- kitty-browse：新增 `internal/transport`（Unix / Windows named pipe）、平台无关
+  `control`、shared hub 的 endpoint / lock / token、Windows profile lock、
+  Chrome/Edge 探测和 Windows CI job。
+- Golder：`browserctl` Windows dialer、`browserpool` Windows runtime / helper
+  env、pipe metadata 发现、GUI 去 `GOOS` 门、Windows CI job。
+- 依赖锁定：`github.com/getan/kitty-browse v0.2.18-0.20261128145844-5db14e6a6473`
+  （伪版本，未创建 tag）。
+- 已验证：Windows `go build ./...`、darwin/linux 交叉构建、Windows
+  transport/control/shared hub 单测、GUI 与 browserpool 编译。
+- 已知限制：kitty-browse 完整 Windows 测试仍有既有的 PTY、文件权限和终端
+  graphics 失败，不属于本 transport 改动；workspace/CLI browser pane 的全量
+  parity 未包含；真实 GUI 浏览器操作仍需 Windows 人工验收。
