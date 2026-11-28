@@ -271,14 +271,23 @@ func (g *ControlGuard) release(id string) {
 	}
 }
 
-// launchArgv creates the real OS envelope before asking the daemon to spawn.
-// It never silently falls back to bare execution. The environment is an allow
-// list: a daemon's inherited provider tokens must not become pane environment.
+// launchArgv prepares a GUI terminal launch. It uses the real OS envelope
+// wherever one exists and never silently falls back to bare execution there.
+// On Windows, which has no OS sandbox implementation, the GUI terminal is the
+// one exception: it runs unconfined and PrepareGUITerminal supplies an explicit
+// environment allow list. tuios panes still fail closed.
 func (g *ControlGuard) launchArgv(ctx context.Context, argv []string, cwd string, network bool, runtimeFiles ...string) ([]string, func(), bool, error) {
-	return g.launchArgvFor(ctx, argv, cwd, network, false, runtimeFiles...)
+	return g.launchArgvForPlatform(ctx, argv, cwd, network, false, true, runtimeFiles...)
 }
 
 func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd string, network, browser bool, runtimeFiles ...string) ([]string, func(), bool, error) {
+	return g.launchArgvForPlatform(ctx, argv, cwd, network, browser, false, runtimeFiles...)
+}
+
+// launchArgvForPlatform builds the pane launch. gui is true only for the
+// in-process GUI terminal, whose process launcher accepts an explicit
+// environment; tuios panes still fail closed when no OS sandbox exists.
+func (g *ControlGuard) launchArgvForPlatform(ctx context.Context, argv []string, cwd string, network, browser, gui bool, runtimeFiles ...string) ([]string, func(), bool, error) {
 	if g.Mode != nil && g.Mode.Mode() == permissions.ReadOnly {
 		return nil, nil, false, errors.New("read-only mode cannot launch panes")
 	}
@@ -289,7 +298,7 @@ func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd str
 		return nil, nil, false, errors.New("pane/browser launch requires reviewed network permission")
 	}
 	if len(argv) == 0 {
-		argv = []string{"bash", "--noprofile", "--norc"}
+		argv = defaultPaneArgv()
 	}
 	if g.full() && !browser && !agentcore.SandboxRequestedFromContext(ctx) {
 		return argv, func() {}, false, nil
@@ -304,7 +313,18 @@ func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd str
 		}
 	}
 	if !browserOutside && g.Runner == nil {
-		return nil, nil, false, errors.New("no OS sandbox is available for controlled panes; nothing was launched")
+		// Windows has never had an OS sandbox implementation. Refusing every
+		// controlled pane there would disable the terminal while the bash tool
+		// keeps running unconfined, so the GUI terminal gets the same honest
+		// fallback: isolated=false, with a scrubbed environment supplied by the
+		// GUI process launcher. tuios still fails closed because the daemon has
+		// no way to accept that environment.
+		if gui && !browser && runtime.GOOS == "windows" &&
+			!agentcore.SandboxRequestedFromContext(ctx) &&
+			seatbelt.ModeFromEnv() != seatbelt.ModeEnforce {
+			return argv, func() {}, false, nil
+		}
+		return nil, nil, false, errors.New("no OS sandbox is available for controlled panes; nothing was launched. Linux: install bubblewrap; macOS: use full-access mode for an unconfined pane; Windows: only the GUI terminal supports an unconfined pane")
 	}
 	home, err := os.MkdirTemp("", "golder-pane-home-")
 	if err != nil {
@@ -380,6 +400,24 @@ func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd str
 		}
 		cleanHome()
 	}, true, nil
+}
+
+// defaultPaneArgv picks an interactive shell for a new pane. Windows has no
+// bash by default and the old "bash --noprofile --norc" default failed before
+// the pane could open.
+func defaultPaneArgv() []string {
+	if runtime.GOOS != "windows" {
+		return []string{"bash", "--noprofile", "--norc"}
+	}
+	shell := resolveShell("", "windows", shellLookPath)
+	switch shell.kind {
+	case "powershell":
+		return []string{shell.path, "-NoLogo", "-NoProfile"}
+	case "bash":
+		return []string{shell.path, "--noprofile", "--norc"}
+	default:
+		return []string{shell.path}
+	}
 }
 
 // presentationEnv carries the display identity the pane's terminal declared.

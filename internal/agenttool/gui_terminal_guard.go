@@ -3,7 +3,11 @@ package agenttool
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/permissions"
@@ -13,7 +17,10 @@ import (
 // GUITerminalEnvelope carries the actual launch argv and policy ceiling of one
 // Agent-created GUI terminal. Cleanup belongs to the process and runs on exit.
 type GUITerminalEnvelope struct {
-	Argv     []string
+	Argv []string
+	// Env, when non-nil, replaces the child's environment. The Windows
+	// unconfined fallback uses it to keep provider tokens out of the pane.
+	Env      []string
 	Cleanup  func()
 	Isolated bool
 	Network  bool
@@ -21,8 +28,10 @@ type GUITerminalEnvelope struct {
 	Policy   [32]byte
 }
 
-// PrepareGUITerminal uses the same scrubbed, bounded launcher as tuios helpers.
-// A one-call path grant cannot be turned into a persistent shell capability.
+// PrepareGUITerminal uses the bounded ControlGuard launcher. A one-call path
+// grant cannot be turned into a persistent shell capability. On Windows, where
+// no OS sandbox exists, the GUI terminal gets an unconfined launch with a
+// scrubbed environment; tuios still fails closed.
 func (g *ControlGuard) PrepareGUITerminal(ctx context.Context, argv []string, network bool) (GUITerminalEnvelope, error) {
 	if g == nil || !agentcore.ExternalToolAuthorized(ctx) {
 		return GUITerminalEnvelope{}, errors.New("terminal: an authorized tool call is required")
@@ -47,7 +56,11 @@ func (g *ControlGuard) PrepareGUITerminal(ctx context.Context, argv []string, ne
 	}
 	// An unconfined full-access shell has network even if the request said off;
 	// record the actual ceiling rather than claiming a restriction it lacks.
-	return GUITerminalEnvelope{Argv: wrapped, Cleanup: cleanup, Isolated: isolated, Network: network || !isolated, Shell: len(argv) == 0, Policy: policy}, nil
+	var env []string
+	if !isolated && runtime.GOOS == "windows" {
+		env = windowsPaneEnv()
+	}
+	return GUITerminalEnvelope{Argv: wrapped, Env: env, Cleanup: cleanup, Isolated: isolated, Network: network || !isolated, Shell: len(argv) == 0, Policy: policy}, nil
 }
 
 // CheckGUITerminalInput revalidates a persistent envelope immediately before
@@ -72,14 +85,55 @@ func (g *ControlGuard) checkGUITerminal(ctx context.Context, envelope GUITermina
 	if envelope.Policy != controlPolicyStamp() {
 		return errors.New("terminal: sandbox policy changed; create a new Agent terminal")
 	}
-	if input && envelope.Network && !g.network(ctx) {
+	windowsUnconfined := runtime.GOOS == "windows" && !envelope.Isolated
+	if input && envelope.Network && !g.network(ctx) && !windowsUnconfined {
 		return errors.New("terminal: this pane has network access; input requires reviewed network authority")
 	}
 	if !envelope.Isolated && (agentcore.SandboxRequestedFromContext(ctx) || seatbelt.ModeFromEnv() == seatbelt.ModeEnforce) {
 		return errors.New("terminal: this pane cannot satisfy required OS containment")
 	}
-	if !envelope.Isolated && !g.full() {
+	if !envelope.Isolated && !windowsUnconfined && !g.full() {
 		return errors.New("terminal: this Agent pane was created outside the sandbox and is no longer in full-access mode")
 	}
 	return nil
+}
+
+// windowsPaneEnv is the allow list a GUI terminal child receives on Windows
+// when no OS sandbox exists. The process launcher uses this slice as the whole
+// environment, so provider tokens and other daemon secrets cannot leak into an
+// Agent-created shell. The variables retained are the ones Windows itself,
+// Git Bash, PowerShell and ordinary CLI tools need to start.
+func windowsPaneEnv() []string {
+	names := []string{
+		"PATH", "PATHEXT", "SystemRoot", "SystemDrive", "windir", "ComSpec",
+		"TEMP", "TMP", "TMPDIR", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOME",
+		"APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)",
+		"ProgramData", "PSModulePath", "NUMBER_OF_PROCESSORS",
+		"PROCESSOR_ARCHITECTURE", "OS", "LANG", "LC_ALL", "LC_CTYPE",
+	}
+	env := make([]string, 0, len(names))
+	for _, name := range names {
+		if value, ok := os.LookupEnv(name); ok && value != "" {
+			env = append(env, name+"="+value)
+		}
+	}
+	// cmd.exe and PowerShell need a system root even when the daemon was
+	// started with a minimal environment.
+	systemRoot := os.Getenv("SystemRoot")
+	if systemRoot == "" {
+		systemRoot = `C:\Windows`
+		env = append(env, `SystemRoot=C:\Windows`)
+	}
+	if os.Getenv("ComSpec") == "" {
+		env = append(env, `ComSpec=`+systemRoot+`\System32\cmd.exe`)
+	}
+	if os.Getenv("TEMP") == "" && os.Getenv("TMP") == "" {
+		temp := os.TempDir()
+		env = append(env, "TEMP="+temp, "TMP="+temp)
+	}
+	// Keep the manifest deterministic for tests and logs.
+	sort.Slice(env, func(i, j int) bool {
+		return strings.ToUpper(env[i]) < strings.ToUpper(env[j])
+	})
+	return env
 }

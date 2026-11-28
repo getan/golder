@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -101,5 +102,37 @@ func TestGUITerminalRejectsPolicyChangeDuringLaunch(t *testing.T) {
 	}
 	if !runner.cleaned {
 		t.Fatal("failed terminal setup leaked its sandbox cleanup")
+	}
+}
+
+func TestWindowsPaneEnvScrubsDaemonSecrets(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "must-not-leak")
+	t.Setenv("PATH", `C:\Tools`)
+	t.Setenv("SystemRoot", `C:\Windows`)
+	t.Setenv("ComSpec", `C:\Windows\System32\cmd.exe`)
+
+	env := windowsPaneEnv()
+	if !containsString(env, `PATH=C:\Tools`) {
+		t.Fatalf("pane env lost PATH: %q", env)
+	}
+	if !containsString(env, `SystemRoot=C:\Windows`) {
+		t.Fatalf("pane env lost SystemRoot: %q", env)
+	}
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "OPENAI_API_KEY=") {
+			t.Fatalf("provider token leaked into the pane environment: %q", entry)
+		}
+	}
+}
+
+func TestWindowsPaneEnvSuppliesSystemFallbacks(t *testing.T) {
+	t.Setenv("SystemRoot", "")
+	t.Setenv("ComSpec", "")
+	env := windowsPaneEnv()
+	if !containsString(env, `SystemRoot=C:\Windows`) {
+		t.Fatalf("pane env lacks the SystemRoot fallback: %q", env)
+	}
+	if !containsString(env, `ComSpec=C:\Windows\System32\cmd.exe`) {
+		t.Fatalf("pane env lacks the ComSpec fallback: %q", env)
 	}
 }

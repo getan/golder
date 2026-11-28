@@ -194,6 +194,13 @@ interactive REPL/TUI.
   fails with “No artifacts found”.
 
 ### Windows desktop compatibility
+- Skip the `System32\bash.exe` WSL launcher stub when selecting the bash tool's
+  interpreter, probe Git Bash before use, and fall back through PowerShell 7,
+  Windows PowerShell 5.1 and cmd. Failed commands now report the shell, argv,
+  cwd and exit code, and native output is decoded from the OEM/ANSI code page.
+- Let Agent-created GUI terminals open on Windows despite the absence of an OS
+  sandbox, labelled unconfined and launched with a scrubbed environment, and
+  default new Windows panes to Git Bash or PowerShell instead of bash.
 - Add a native File/Exit menu and guard shutdown while a Windows file picker is
   open. The Windows GUI packaging workflow exercises the menu and picker on a
   real Windows runner; see [v1.5.70 notes](docs/releases/v1.5.70.md).

@@ -40,7 +40,7 @@ func TestBashSandboxPolicyBindsOnlyRequestedTTY(t *testing.T) {
 	for _, tty := range []bool{false, true} {
 		runner := &stubRunner{}
 		tool := &BashTool{Sandbox: runner}
-		_, cleanup, msg, ok, isolated := tool.sandboxArgv(context.Background(), "bash", "-c", "echo ok", "", tty)
+		_, cleanup, msg, ok, isolated := tool.sandboxArgv(context.Background(), shellSpec{path: "bash", args: []string{"-c"}, kind: "bash"}, "echo ok", "", tty)
 		if cleanup != nil {
 			cleanup()
 		}

@@ -33,7 +33,7 @@ func TestMain(m *testing.M) {
 func TestBashTTYUsesRegisteredTerminalBootstrap(t *testing.T) {
 	root := t.TempDir()
 	tool := &BashTool{Dir: root, Sandbox: &seatbelt.SeatbeltRunner{ProjectDir: root, TmpDir: t.TempDir()}}
-	argv, cleanup, msg, ok, isolated := tool.sandboxArgv(context.Background(), "/bin/bash", "-c", "stty -a", "", true)
+	argv, cleanup, msg, ok, isolated := tool.sandboxArgv(context.Background(), shellSpec{path: "/bin/bash", args: []string{"-c"}, kind: "bash"}, "stty -a", "", true)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -44,7 +44,7 @@ func TestBashTTYUsesRegisteredTerminalBootstrap(t *testing.T) {
 	if !ok || !isolated || msg != "" || len(argv) != 7 || argv[0] != executable || argv[1] != seatbelt.TerminalBootstrapFlag || argv[3] != "--" {
 		t.Fatalf("isolated bash TTY bypassed its bootstrap: argv=%q ok=%t isolated=%t error=%q", argv, ok, isolated, msg)
 	}
-	plain, plainCleanup, msg, ok, isolated := tool.sandboxArgv(context.Background(), "/bin/bash", "-c", "echo ok", "", false)
+	plain, plainCleanup, msg, ok, isolated := tool.sandboxArgv(context.Background(), shellSpec{path: "/bin/bash", args: []string{"-c"}, kind: "bash"}, "echo ok", "", false)
 	if plainCleanup != nil {
 		defer plainCleanup()
 	}

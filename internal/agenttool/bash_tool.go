@@ -63,7 +63,8 @@ func truncateBashOutput(s string) string {
 type BashTool struct {
 	// Dir is the working directory for commands. Empty uses the process CWD.
 	Dir string
-	// Shell is the interpreter path. Empty defaults to "bash".
+	// Shell is the interpreter path. Empty resolves the platform default:
+	// bash -c on POSIX, and Git Bash -> PowerShell -> cmd on Windows.
 	Shell string
 	// Sessions tracks running commands so they can be polled and killed.
 	// Production always wires one shared manager (BuiltinTools); tests may
@@ -208,8 +209,8 @@ func (t *BashTool) sandboxRoute(ctx context.Context, perms string) (sandbox bool
 // means run directly (auto mode without a runner: the gate already prompted).
 // sandboxed reports whether the returned argv goes through the OS sandbox, so
 // the result builder can label sandbox-shaped failures for the model.
-func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms string, tty bool) (argv []string, cleanup func(), msg string, ok bool, sandboxed bool) {
-	argv = []string{shell, flag, command}
+func (t *BashTool) sandboxArgv(ctx context.Context, shell shellSpec, command, perms string, tty bool) (argv []string, cleanup func(), msg string, ok bool, sandboxed bool) {
+	argv = shell.argv(command)
 	sandbox, block := t.sandboxRoute(ctx, perms)
 	if block != "" {
 		return nil, nil, block, false, false
@@ -317,9 +318,9 @@ func (t *BashTool) Description() string {
 		"for interactive programs whose stdin must be written (a REPL, a pager, a " +
 		"prompt). The tool has no \"description\" argument: put a short reason in " +
 		"justification. A non-zero " +
-		"exit code is reported as an error. On Windows the command runs under bash " +
-		"if available (Git Bash/WSL), else PowerShell, else cmd — prefer portable " +
-		"commands."
+		"exit code is reported as an error. On Windows the command runs under a real " +
+		"Git Bash when one is installed, else PowerShell, else cmd — prefer portable " +
+		"commands. The System32 WSL launcher stub is not treated as bash."
 }
 
 // Schema implements AgentTool.
@@ -482,31 +483,6 @@ func looksPTYUnavailable(output string) bool {
 // alternative is to test the interactive behavior in-process.
 const ptyUnavailableHint = "\n[pty: this environment cannot allocate a pseudo-terminal (the sandbox provides no PTYs). A sandbox_permissions=\"require_escalated\" retry will not create one — do not retry it. Test the interactive/TUI behavior with an in-process or unit test instead.]"
 
-// resolveShell picks the interpreter and the flag that makes it read the command
-// from the next argument. An explicit shell (BashTool.Shell) is always honored as
-// a POSIX-style "<shell> -c <command>".
-//
-// On Windows with no explicit shell, the naive "bash -c" hardcode fails on stock
-// machines that have no bash on PATH — the model then retries bash blindly and
-// every call errors (issue #518). So we prefer a real bash when one is present
-// (Git Bash / WSL / MSYS), since commands are authored in bash syntax, and fall
-// back to PowerShell, then cmd, so a command still runs on a bare Windows box.
-func resolveShell(explicit, goos string, lookPath func(string) (string, error)) (shell, flag string) {
-	if explicit != "" {
-		return explicit, "-c"
-	}
-	if goos == "windows" {
-		if p, err := lookPath("bash"); err == nil {
-			return p, "-c"
-		}
-		if p, err := lookPath("powershell"); err == nil {
-			return p, "-Command"
-		}
-		return "cmd", "/C"
-	}
-	return "bash", "-c"
-}
-
 // bashYield clamps the caller's yield window, defaulting to bashDefaultYield.
 func bashYield(ms int) time.Duration {
 	if ms <= 0 {
@@ -618,8 +594,8 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		return errorResult("bash: network access was requested but was not authorized; the command was not run. Ask for a network approval, or keep the command local"), nil
 	}
 
-	shell, flag := resolveShell(t.Shell, runtime.GOOS, shellLookPath)
-	argv, cleanup, msg, ok, sandboxed := t.sandboxArgv(ctx, shell, flag, a.Command, a.SandboxPermissions, a.TTY)
+	shell := resolveShell(t.Shell, runtime.GOOS, shellLookPath)
+	argv, cleanup, msg, ok, sandboxed := t.sandboxArgv(ctx, shell, a.Command, a.SandboxPermissions, a.TTY)
 	if !ok {
 		if msg == "" {
 			return errorResult("bash: command blocked"), nil
@@ -673,7 +649,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		var execErr *exec.Error
 		if errors.As(err, &execErr) {
 			return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("")}},
-				fmt.Errorf("bash: could not start shell %q: %v. On Windows install Git Bash or WSL (or configure a shell); commands are bash syntax", shell, execErr.Err)
+				fmt.Errorf("bash: could not start shell %q: %v (cwd %q, argv %s). On Windows install Git for Windows (Git Bash) or configure BashTool.Shell; otherwise PowerShell/cmd are used", shell.path, execErr.Err, t.Dir, shellArgvPreview(argv))
 		}
 		return errorResult(fmt.Sprintf("bash: could not start command: %v", err)), nil
 	}
@@ -691,13 +667,13 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	// the old foreground behavior (Ctrl+C kills the running command).
 	if !exited && ctx.Err() != nil {
 		sess.Kill()
-		out := truncateBashOutput(sess.ReadNew())
+		out := truncateBashOutput(normalizeShellOutput(sess.ReadNew()))
 		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(out)}},
-			fmt.Errorf("bash: command canceled\n%s", out)
+			fmt.Errorf("bash: command canceled\n%s\n%s", out, shellTraceLine(shell, argv, t.Dir, -1))
 	}
 
 	snap := sess.Snapshot()
-	out := truncateBashOutput(sess.ReadNew())
+	out := truncateBashOutput(normalizeShellOutput(sess.ReadNew()))
 	// A failed sandboxed command is labelled so the model can tell sandbox
 	// policy from an ordinary failure and, when warranted, ask for escalation.
 	// The hint is appended to the output the model sees (the error line and the
@@ -808,12 +784,12 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if snap.TimedOut {
 		return agentcore.AgentToolResult{
 				Content: agentcore.ContentList{agentcore.NewTextContent(out + note)},
-				Details: map[string]any{"envelope": envelopeDetail(sandboxed)},
+				Details: map[string]any{"envelope": envelopeDetail(sandboxed), "shell": shell.path, "cwd": t.Dir},
 			},
-			fmt.Errorf("bash: command timed out after %s\n%s", snap.Timeout, out)
+			fmt.Errorf("bash: command timed out after %s\n%s\n%s", snap.Timeout, out, shellTraceLine(shell, argv, t.Dir, -1))
 	}
 	if snap.ExitCode != 0 {
-		details := map[string]any{"exitCode": snap.ExitCode}
+		details := map[string]any{"exitCode": snap.ExitCode, "shell": shell.path, "cwd": t.Dir}
 		details["envelope"] = envelopeDetail(sandboxed)
 		if snap.Err != "" {
 			details["processError"] = snap.Err
@@ -832,11 +808,11 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 				Content: agentcore.ContentList{agentcore.NewTextContent(out)},
 				Details: details,
 			},
-			fmt.Errorf("bash: command %s\n%s%s", description, out, hint)
+			fmt.Errorf("bash: command %s\n%s%s\n%s", description, out, hint, shellTraceLine(shell, argv, t.Dir, snap.ExitCode))
 	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(out + note)},
-		Details: map[string]any{"exitCode": 0, "envelope": envelopeDetail(sandboxed)},
+		Details: map[string]any{"exitCode": 0, "envelope": envelopeDetail(sandboxed), "shell": shell.path},
 	}, nil
 }
 

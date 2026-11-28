@@ -181,7 +181,7 @@ func (t *WriteStdinTool) Execute(ctx context.Context, id string, args json.RawMe
 		sess.Wait(ctx, exitReportGrace, execsess.WaitExit)
 	}
 
-	out := truncateBashOutput(sess.ReadNew())
+	out := truncateBashOutput(normalizeShellOutput(sess.ReadNew()))
 	snap := sess.Snapshot()
 	status := sessionStatusLine(snap)
 	text := status

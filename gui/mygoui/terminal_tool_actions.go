@@ -200,7 +200,7 @@ func (t *terminalTool) create(ctx context.Context, req terminalToolArgs) (agentc
 		}
 		consumed = true
 		var err error
-		process, err = terminalaccess.StartProcess(terminalaccess.ProcessOptions{Argv: envelope.Argv, Dir: t.agent.project, Cleanup: envelope.Cleanup})
+		process, err = terminalaccess.StartProcess(terminalaccess.ProcessOptions{Argv: envelope.Argv, Dir: t.agent.project, Env: envelope.Env, Cleanup: envelope.Cleanup})
 		return err
 	})
 	if err != nil {

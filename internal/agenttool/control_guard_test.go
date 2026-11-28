@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -123,7 +124,18 @@ func TestBrowserRuntimePaneAllowsLifecycleButNotTerminalInput(t *testing.T) {
 func TestControlLaunchFailsClosedAndScrubsEnvironment(t *testing.T) {
 	g := NewControlGuard(t.TempDir())
 	g.Runner = nil
-	if _, _, _, err := g.launchArgv(context.Background(), []string{"sh"}, g.Root, false); err == nil {
+	if runtime.GOOS == "windows" {
+		// Windows has never had an OS sandbox. The GUI terminal gets an honest
+		// unconfined fallback; every other platform must still fail closed.
+		_, cleanup, isolated, err := g.launchArgv(context.Background(), []string{"sh"}, g.Root, false)
+		if err != nil {
+			t.Fatalf("Windows GUI terminal should run unconfined: %v", err)
+		}
+		if isolated {
+			t.Fatal("Windows GUI terminal falsely reported isolation")
+		}
+		cleanup()
+	} else if _, _, _, err := g.launchArgv(context.Background(), []string{"sh"}, g.Root, false); err == nil {
 		t.Fatal("missing runner ran bare")
 	}
 	r := &controlRunner{}
