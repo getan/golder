@@ -50,3 +50,26 @@ jobs:
         # view) and stayed green for days, 34s short of the default limit.
         # A tighter ceiling turns the next such regression into a red build.
         run: go test -race -timeout 6m ./... github.com/charmbracelet/ultraviolet/...
+
+  windows:
+    # Keep the Windows-only transport, browser discovery and GUI wiring
+    # compiling and tested; the main test job remains Linux-first.
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Windows browser transport tests
+        run: go test ./internal/browserctl ./internal/browserpool ./internal/agenttool -run 'TestCheckSocketWindowsPipe|TestCanonicalPipeEndpoint|TestValidBrowserMetadataEndpointRejectsUnknownPipe' -count=1
+
+      - name: Build GUI
+        run: go build ./gui/cmd/golder-gui

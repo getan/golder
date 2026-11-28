@@ -11,6 +11,13 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Windows GUI
+- **The Windows GUI now exposes the `browser` tool.** kitty-browse's control API
+  and shared browser hub use current-user named pipes instead of Unix sockets;
+  macOS and Linux keep their existing socket, permission and `flock` behavior.
+  Chrome and Chromium-based Edge are discovered automatically. See
+  `docs/windows-browser-use.md`.
+
 ### TUI
 - **A split Esc no longer turns a mouse/key report into typed text or an
   accidental double-Esc exit.** The shared terminal reader holds a lone Esc

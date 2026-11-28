@@ -1,5 +1,10 @@
 # Controlled browser runtime on macOS
 
+> Windows GUI uses the same control API over current-user named pipes for the
+> shared hub and each per-view endpoint; see
+> [Windows GUI browser support](windows-browser-use.md). macOS and Linux keep
+> their existing owner-only Unix socket, permission and `flock` behavior.
+
 ## Execution and authorization
 
 Controlled Chromium runs outside **outer Seatbelt** on macOS. Chromium's own

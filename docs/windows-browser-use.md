@@ -1,6 +1,6 @@
 # Windows GUI 浏览器支持技术方案
 
-> 状态：设计稿，未实施
+> 状态：已实现（分支 `windows-browser-transport`，待依赖版本与发布验收）
 > 最后更新：2026-11-28
 > 范围：Windows GUI 的 `browser` 工具与 shared browser hub
 > 原则：macOS/Linux 行为不变；不引入 Windows 专用浏览器生命周期；不使用 TCP 控制通道
