@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	stdruntime "runtime"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -145,11 +144,9 @@ func main() {
 	maxContext, _ := cfg.Compaction.ResolveMaxContext()
 	memoryEnabled := cfg.Memory.Resolve().Enabled
 	browserHosts := newNativeBrowserHosts()
-	if stdruntime.GOOS == "darwin" || stdruntime.GOOS == "linux" {
-		agenttool.ConfigureNativeBrowserLauncher(browserHosts.Start)
-		defer agenttool.ConfigureNativeBrowserLauncher(nil)
-		defer browserHosts.Close()
-	}
+	agenttool.ConfigureNativeBrowserLauncher(browserHosts.Start)
+	defer agenttool.ConfigureNativeBrowserLauncher(nil)
+	defer browserHosts.Close()
 
 	projectFactory := func(ctx context.Context, cwd string, setup appsession.ProjectSetup) (run.Env, error) {
 		if err := ctx.Err(); err != nil {
