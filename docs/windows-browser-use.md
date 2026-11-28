@@ -293,8 +293,9 @@ Unix 回归要求：
   Chrome/Edge 探测和 Windows CI job。
 - Golder：`browserctl` Windows dialer、`browserpool` Windows runtime / helper
   env、pipe metadata 发现、GUI 去 `GOOS` 门、Windows CI job。
-- 依赖锁定：`github.com/getan/kitty-browse v0.2.18-0.20261128145844-5db14e6a6473`
-  （伪版本，未创建 tag）。
+- 依赖锁定：`github.com/getan/kitty-browse v0.2.18-0.20261128151555-a0b85f5db435`
+  （伪版本，未创建 kitty tag）。
+- kitty-browse 的 Linux + Windows CI 已全绿（run 46158987830）。
 - 已验证：Windows `go build ./...`、darwin/linux 交叉构建、Windows
   transport/control/shared hub 单测、GUI 与 browserpool 编译。
 - 已知限制：kitty-browse 完整 Windows 测试仍有既有的 PTY、文件权限和终端
