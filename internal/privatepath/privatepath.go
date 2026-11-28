@@ -163,7 +163,7 @@ func checkOpened(path string, info fs.FileInfo, perm fs.FileMode) error {
 	if !ownedByUs(info) {
 		return fmt.Errorf("%s %w", path, ErrForeignOwner)
 	}
-	if outside := info.Mode().Perm() &^ perm.Perm(); outside != 0 {
+	if widerThanPerm(info.Mode().Perm(), perm.Perm()) {
 		return fmt.Errorf("%s is mode %04o, wider than the %04o it must be (%w)", path, info.Mode().Perm(), perm.Perm(), ErrNotPrivate)
 	}
 	return nil

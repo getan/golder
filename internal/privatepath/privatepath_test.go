@@ -24,6 +24,25 @@ func shortTemp(t *testing.T) string {
 	return dir
 }
 
+// modeBitsTracked reports whether this platform keeps the permission bits a
+// chmod sets. Windows reports every writable file as 0666 and does not, so the
+// widening assertions only mean anything where the round trip holds.
+func modeBitsTracked(t *testing.T) bool {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "probe")
+	if err := os.WriteFile(path, nil, FileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, FileMode); err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode().Perm() == FileMode.Perm()
+}
+
 // EnsureDir creates owner-only, tightens one that is too wide, and refuses one
 // that is not a directory at all.
 func TestEnsureDirCreatesAndTightens(t *testing.T) {
@@ -80,6 +99,9 @@ func TestEnsureDirRefusesASymlink(t *testing.T) {
 	}
 	if !errors.Is(err, ErrSymlink) {
 		t.Errorf("err = %v, want it to be ErrSymlink", err)
+	}
+	if !modeBitsTracked(t) {
+		return
 	}
 	info, statErr := os.Lstat(target)
 	if statErr != nil {
@@ -170,17 +192,20 @@ func TestCheckFileAndReadFile(t *testing.T) {
 		t.Errorf("ReadFile with a limit = %q, %v", limited, err)
 	}
 
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := CheckFile(path, FileMode); !errors.Is(err, ErrNotPrivate) {
-		t.Errorf("CheckFile on a 0644 file = %v, want ErrNotPrivate", err)
-	}
-	if _, err := ReadFile(path, FileMode, 1<<10); !errors.Is(err, ErrNotPrivate) {
-		t.Errorf("ReadFile on a 0644 file = %v, want ErrNotPrivate", err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		t.Fatal(err)
+	// Widening is only observable where the platform keeps permission bits.
+	if modeBitsTracked(t) {
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckFile(path, FileMode); !errors.Is(err, ErrNotPrivate) {
+			t.Errorf("CheckFile on a 0644 file = %v, want ErrNotPrivate", err)
+		}
+		if _, err := ReadFile(path, FileMode, 1<<10); !errors.Is(err, ErrNotPrivate) {
+			t.Errorf("ReadFile on a 0644 file = %v, want ErrNotPrivate", err)
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if err := CheckFile(filepath.Join(base, "missing"), FileMode); err == nil {

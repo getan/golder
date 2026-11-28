@@ -372,3 +372,27 @@ func TestBrowserRuntimeDirRefusesAPreCreatedSymlink(t *testing.T) {
 		t.Errorf("the link's target gained %v, want nothing", entries)
 	}
 }
+
+// A record golder wrote itself must be one it can read back. Session discovery
+// and the GUI drawer both start from this read, so a platform whose stat reports
+// every file as 0666 used to lose its own browser: the record was written, then
+// refused on the next read as "readable by others".
+func TestBrowserMetadataRoundTrip(t *testing.T) {
+	cwd := t.TempDir()
+	written := browserMetadata{
+		Name: "view-0123456789ab", Program: "native-browser-host", BrowserID: "browser-1",
+		Socket: `\\.\pipe\golder-view-0123456789ab`, PersistentProfile: sharedBrowserProfileName,
+		ConversationID: "conversation", Instance: "browser/default",
+	}
+	path := browserMetadataPath(cwd, written.Name)
+	if err := writeBrowserMetadata(path, written); err != nil {
+		t.Fatalf("writeBrowserMetadata: %v", err)
+	}
+	read, err := readBrowserMetadata(path)
+	if err != nil {
+		t.Fatalf("readBrowserMetadata on a record golder just wrote: %v", err)
+	}
+	if read.Name != written.Name || read.BrowserID != written.BrowserID || read.Socket != written.Socket {
+		t.Errorf("read back %+v, want the record that was written (%+v)", read, written)
+	}
+}

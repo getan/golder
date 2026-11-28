@@ -34,6 +34,11 @@ func ownedByUs(info fs.FileInfo) bool {
 	return int(st.Uid) == ownerUID()
 }
 
+// widerThanPerm reports whether actual grants more than allowed. Mode bits are
+// the whole access story here, so a file wider than the mode golder wrote is
+// refused.
+func widerThanPerm(actual, allowed fs.FileMode) bool { return actual&^allowed != 0 }
+
 // ownerUID is the uid this process runs as. It is a variable so a test on a
 // machine where it cannot chown a directory to another account can still stand in
 // for one; nothing outside this package sets it.
